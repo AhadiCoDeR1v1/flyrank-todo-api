@@ -1,9 +1,13 @@
 const express = require('express');
+const swaggerUi = require('swagger-ui-express');   // Import UI rendering library
+const swaggerDocument = require('./openapi.json');
 const app = express();
 const PORT = 3000;
 
 
 app.use(express.json());
+
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // In-Memory mock data list
 let tasks = [
