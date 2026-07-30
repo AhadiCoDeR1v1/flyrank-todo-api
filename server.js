@@ -28,8 +28,47 @@ app.get('/health', (req, res) => {
 
 
 app.get('/tasks', (req, res) => {
-    const rows = db.prepare('SELECT * FROM tasks').all();
+    const { search, done, sort } = req.query;
+    let query = 'SELECT * FROM tasks';
+    const conditions = [];
+    const params = [];
+
+    if (search) {
+        conditions.push('title LIKE ?');
+        params.push(`%${search}%`);
+    }
+
+    if (done !== undefined) {
+        const doneVal = (done === 'true' || done === '1') ? 1 : 0;
+        conditions.push('done = ?');
+        params.push(doneVal);
+    }
+
+    if (conditions.length > 0) {
+        query += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    if (sort === 'title') {
+        query += ' ORDER BY title ASC';
+    } else {
+        query += ' ORDER BY id ASC';
+    }
+
+    const rows = db.prepare(query).all(...params);
     res.json(rows.map(formatTask));
+});
+
+// GET statistics (Bonus endpoint)
+app.get('/stats', (req, res) => {
+    const total = db.prepare('SELECT COUNT(*) as count FROM tasks').get().count;
+    const completed = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE done = 1').get().count;
+    const pending = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE done = 0').get().count;
+
+    res.json({
+        total,
+        completed,
+        pending
+    });
 });
 
 // GET single task by id
