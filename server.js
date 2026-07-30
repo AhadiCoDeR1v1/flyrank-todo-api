@@ -9,13 +9,14 @@ app.use(express.json());
 
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
-// In-Memory mock data list
-let tasks = [
-    { id: 1, title: "Configure Linode production server", done: true },
-    { id: 2, title: "Test local trading bot telemetry", done: false },
-    { id: 3, title: "Optimize Spring Boot memory footprint", done: false }
-];
+const db = require('./db');
 
+// Helper to format database task row into API response structure
+const formatTask = (row) => ({
+    id: row.id,
+    title: row.title,
+    done: Boolean(row.done)
+});
 
 app.get('/', (req, res) => {
     res.json({ name: "Task API", version: "1.0", endpoints: ["/tasks"] });
@@ -27,19 +28,24 @@ app.get('/health', (req, res) => {
 
 
 app.get('/tasks', (req, res) => {
-    res.json(tasks);
+    const rows = db.prepare('SELECT * FROM tasks').all();
+    res.json(rows.map(formatTask));
 });
 
 // GET single task by id
 app.get('/tasks/:id', (req, res) => {
-    const taskId = parseInt(req.params.id);
-    const task = tasks.find(t => t.id === taskId);
+    const taskId = parseInt(req.params.id, 10);
+    if (isNaN(taskId)) {
+        return res.status(400).json({ error: "Invalid task ID format" });
+    }
 
-    if (!task) {
+    const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+
+    if (!row) {
         return res.status(404).json({ error: `Task ${req.params.id} not found` });
     }
 
-    res.json(task);
+    res.json(formatTask(row));
 });
 app.post('/tasks', (req, res) => {
     const { title } = req.body;
