@@ -66,10 +66,13 @@ app.post('/tasks', (req, res) => {
     res.status(201).json(newTask);
 });
 app.put('/tasks/:id', (req, res) => {
-    const taskId = parseInt(req.params.id);
-    const task = tasks.find(t => t.id === taskId);
+    const taskId = parseInt(req.params.id, 10);
+    if (isNaN(taskId)) {
+        return res.status(400).json({ error: "Invalid task ID format" });
+    }
 
-    if (!task) {
+    const existingTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!existingTask) {
         return res.status(404).json({ error: `Task ${req.params.id} not found` });
     }
 
@@ -82,21 +85,32 @@ app.put('/tasks/:id', (req, res) => {
         return res.status(400).json({ error: "Done state is required and must be a boolean value" });
     }
 
-    task.title = title.trim();
-    task.done = done;
+    const trimmedTitle = title.trim();
+    const doneVal = done ? 1 : 0;
 
-    res.json(task);
+    db.prepare('UPDATE tasks SET title = ?, done = ? WHERE id = ?').run(trimmedTitle, doneVal, taskId);
+
+    const updatedTask = {
+        id: taskId,
+        title: trimmedTitle,
+        done: done
+    };
+
+    res.json(updatedTask);
 });
 
 app.delete('/tasks/:id', (req, res) => {
-    const taskId = parseInt(req.params.id);
-    const index = tasks.findIndex(t => t.id === taskId);
+    const taskId = parseInt(req.params.id, 10);
+    if (isNaN(taskId)) {
+        return res.status(400).json({ error: "Invalid task ID format" });
+    }
 
-    if (index === -1) {
+    const existingTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!existingTask) {
         return res.status(404).json({ error: `Task ${req.params.id} not found` });
     }
 
-    tasks.splice(index, 1);
+    db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
 
     res.status(204).send();
 });
