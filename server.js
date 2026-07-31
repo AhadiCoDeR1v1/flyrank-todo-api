@@ -102,33 +102,29 @@ app.get('/tasks/:id', async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
-app.post('/tasks', (req, res) => {
+app.post('/tasks', async (req, res) => {
     const { title } = req.body;
 
     if (!title || typeof title !== 'string' || title.trim() === '') {
         return res.status(400).json({ error: "Title is required and cannot be empty" });
     }
 
-    const trimmedTitle = title.trim();
-    const info = db.prepare('INSERT INTO tasks (title, done) VALUES (?, 0)').run(trimmedTitle);
-
-    const newTask = {
-        id: Number(info.lastInsertRowid),
-        title: trimmedTitle,
-        done: false
-    };
-
-    res.status(201).json(newTask);
+    try {
+        const trimmedTitle = title.trim();
+        const result = await db.query(
+            'INSERT INTO tasks (title, done) VALUES ($1, $2) RETURNING *',
+            [trimmedTitle, false]
+        );
+        res.status(201).json(formatTask(result.rows[0]));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
-app.put('/tasks/:id', (req, res) => {
+
+app.put('/tasks/:id', async (req, res) => {
     const taskId = parseInt(req.params.id, 10);
     if (isNaN(taskId)) {
         return res.status(400).json({ error: "Invalid task ID format" });
-    }
-
-    const existingTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!existingTask) {
-        return res.status(404).json({ error: `Task ${req.params.id} not found` });
     }
 
     const { title, done } = req.body;
@@ -140,34 +136,39 @@ app.put('/tasks/:id', (req, res) => {
         return res.status(400).json({ error: "Done state is required and must be a boolean value" });
     }
 
-    const trimmedTitle = title.trim();
-    const doneVal = done ? 1 : 0;
+    try {
+        const trimmedTitle = title.trim();
+        const result = await db.query(
+            'UPDATE tasks SET title = $1, done = $2 WHERE id = $3 RETURNING *',
+            [trimmedTitle, done, taskId]
+        );
 
-    db.prepare('UPDATE tasks SET title = ?, done = ? WHERE id = ?').run(trimmedTitle, doneVal, taskId);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: `Task ${req.params.id} not found` });
+        }
 
-    const updatedTask = {
-        id: taskId,
-        title: trimmedTitle,
-        done: done
-    };
-
-    res.json(updatedTask);
+        res.json(formatTask(result.rows[0]));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-app.delete('/tasks/:id', (req, res) => {
+app.delete('/tasks/:id', async (req, res) => {
     const taskId = parseInt(req.params.id, 10);
     if (isNaN(taskId)) {
         return res.status(400).json({ error: "Invalid task ID format" });
     }
 
-    const existingTask = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
-    if (!existingTask) {
-        return res.status(404).json({ error: `Task ${req.params.id} not found` });
+    try {
+        const result = await db.query('DELETE FROM tasks WHERE id = $1 RETURNING *', [taskId]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: `Task ${req.params.id} not found` });
+        }
+
+        res.status(204).send();
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
-
-    db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
-
-    res.status(204).send();
 });
 
 app.listen(PORT, () => {
