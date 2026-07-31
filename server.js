@@ -22,69 +22,85 @@ app.get('/', (req, res) => {
     res.json({ name: "Task API", version: "1.0", endpoints: ["/tasks"] });
 });
 
-app.get('/health', (req, res) => {
-    res.json({ status: "ok" });
+app.get('/health', async (req, res) => {
+    try {
+        await db.query('SELECT 1');
+        res.json({ status: "ok", db: "ok" });
+    } catch (err) {
+        res.status(500).json({ status: "error", db: err.message });
+    }
 });
 
 
-app.get('/tasks', (req, res) => {
-    const { search, done, sort } = req.query;
-    let query = 'SELECT * FROM tasks';
-    const conditions = [];
-    const params = [];
+app.get('/tasks', async (req, res) => {
+    try {
+        const { search, done, sort } = req.query;
+        let query = 'SELECT * FROM tasks';
+        const conditions = [];
+        const params = [];
 
-    if (search) {
-        conditions.push('title LIKE ?');
-        params.push(`%${search}%`);
+        if (search) {
+            params.push(`%${search}%`);
+            conditions.push(`title ILIKE $${params.length}`);
+        }
+
+        if (done !== undefined) {
+            const doneVal = (done === 'true' || done === '1');
+            params.push(doneVal);
+            conditions.push(`done = $${params.length}`);
+        }
+
+        if (conditions.length > 0) {
+            query += ' WHERE ' + conditions.join(' AND ');
+        }
+
+        if (sort === 'title') {
+            query += ' ORDER BY title ASC';
+        } else {
+            query += ' ORDER BY id ASC';
+        }
+
+        const result = await db.query(query, params);
+        res.json(result.rows.map(formatTask));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
-
-    if (done !== undefined) {
-        const doneVal = (done === 'true' || done === '1') ? 1 : 0;
-        conditions.push('done = ?');
-        params.push(doneVal);
-    }
-
-    if (conditions.length > 0) {
-        query += ' WHERE ' + conditions.join(' AND ');
-    }
-
-    if (sort === 'title') {
-        query += ' ORDER BY title ASC';
-    } else {
-        query += ' ORDER BY id ASC';
-    }
-
-    const rows = db.prepare(query).all(...params);
-    res.json(rows.map(formatTask));
 });
 
 // GET statistics (Bonus endpoint)
-app.get('/stats', (req, res) => {
-    const total = db.prepare('SELECT COUNT(*) as count FROM tasks').get().count;
-    const completed = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE done = 1').get().count;
-    const pending = db.prepare('SELECT COUNT(*) as count FROM tasks WHERE done = 0').get().count;
+app.get('/stats', async (req, res) => {
+    try {
+        const totalRes = await db.query('SELECT COUNT(*) FROM tasks');
+        const completedRes = await db.query('SELECT COUNT(*) FROM tasks WHERE done = true');
+        const pendingRes = await db.query('SELECT COUNT(*) FROM tasks WHERE done = false');
 
-    res.json({
-        total,
-        completed,
-        pending
-    });
+        res.json({
+            total: parseInt(totalRes.rows[0].count, 10),
+            completed: parseInt(completedRes.rows[0].count, 10),
+            pending: parseInt(pendingRes.rows[0].count, 10)
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // GET single task by id
-app.get('/tasks/:id', (req, res) => {
+app.get('/tasks/:id', async (req, res) => {
     const taskId = parseInt(req.params.id, 10);
     if (isNaN(taskId)) {
         return res.status(400).json({ error: "Invalid task ID format" });
     }
 
-    const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    try {
+        const result = await db.query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: `Task ${req.params.id} not found` });
+        }
 
-    if (!row) {
-        return res.status(404).json({ error: `Task ${req.params.id} not found` });
+        res.json(formatTask(result.rows[0]));
+    } catch (err) {
+        res.status(500).json({ error: err.message });
     }
-
-    res.json(formatTask(row));
 });
 app.post('/tasks', (req, res) => {
     const { title } = req.body;
