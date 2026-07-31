@@ -1,100 +1,160 @@
-# FlyRank Todo CRUD API (Express & SQLite)
+# FlyRank Todo API — Containerized Stack (Assignment A3)
 
-A lightweight, robust RESTful Task Management API built with Node.js, Express, and a persistent SQLite database using `better-sqlite3`. Exposes endpoints for a full Create, Read, Update, and Delete (CRUD) lifecycle with input validation, parameter searching, sorting, statistics, and interactive Swagger UI documentation.
+A high-performance RESTful Task Management API built with **Node.js**, **Express.js**, and **PostgreSQL** running in **Docker** orchestrating containerized storage via **Docker Compose**.
+
+This assignment completes the storage evolution:
+1. **Assignment A1**: In-memory storage array (*ephemeral*)
+2. **Assignment A2**: SQLite local file database (*disk-persisted*)
+3. **Assignment A3**: PostgreSQL containerized database server (*production-grade containerized persistence*)
+
+> **Core Architectural Principle:** The public REST API contract (`GET`, `POST`, `PUT`, `DELETE`) remains **100% identical**. Storage engine replacement required modifying only the repository module (`db.js`), proving that persistence is an implementation detail behind the API layer.
 
 ---
 
-## 🗄️ Database Architecture (SQLite)
+## ⚡ Quick Start: The One-Command Stack
 
-### Why SQLite?
-- **Serverless & Lightweight:** SQLite requires no separate background server process or installation. It operates directly as a single disk file on the machine.
-- **Zero Configuration:** The database file is created automatically on first run if missing.
-- **Synchronous & Fast:** Powered by `better-sqlite3`, providing high performance with clean, synchronous code readability.
-- **Persistence Guarantee:** Unlike in-memory data arrays, all CRUD modifications survive server restarts.
+Start the entire application (Express API + PostgreSQL Database) with one single command:
 
-### Database Location & Schema
-- **Database File Path:** `./tasks.db` (root directory, automatically generated on application startup).
-- **Table Name:** `tasks`
+```bash
+# 1. Clone repository & enter directory
+git clone https://github.com/AhadiCoDeR1v1/flyrank-todo-api.git
+cd flyrank-todo-api
 
-#### Schema Definition:
+# 2. Copy environment secrets template
+cp .env.example .env
+
+# 3. Start full containerized stack
+docker compose up -d
+```
+
+Access the application immediately at:
+- **API Base URL:** `http://localhost:3000`
+- **Interactive Swagger API Docs:** `http://localhost:3000/docs`
+- **Health & DB Check:** `http://localhost:3000/health`
+
+---
+
+## 🔑 Environment Configuration (`.env`)
+
+Database connection secrets are kept secure using environment variables and are **never** committed to version control (`.env` is added to `.gitignore`).
+
+- `.env.example` *(committed template)*:
+  ```env
+  DATABASE_URL=postgres://postgres:dev@db:5432/tasks
+  PORT=3000
+  ```
+- `.env` *(local runtime secrets)*:
+  ```env
+  DATABASE_URL=postgres://postgres:dev@172.17.0.1:5432/tasks
+  PORT=3000
+  ```
+
+---
+
+## 🗄️ Database Architecture & Storage Scheme
+
+- **Database Engine:** PostgreSQL 16 Alpine container (`postgres:16-alpine`).
+- **Volume Mount:** `taskdata:/var/lib/postgresql/data` (ensures data survives container restarts).
+- **Auto-Initialization & Seeding:** On startup, `db.js` automatically creates the `tasks` table if missing and seeds 3 initial tasks idempotently if the table is empty.
+
+### PostgreSQL Table Schema (`tasks`)
+
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     title TEXT NOT NULL,
-    done INTEGER NOT NULL DEFAULT 0
+    done BOOLEAN NOT NULL DEFAULT FALSE
 );
 ```
 
-### Auto-Seeding Lifecycle
-When the application starts up, `db.js` verifies if the `tasks` table contains any records. If the table is empty (`COUNT == 0`), it automatically seeds three default tasks:
-1. `Configure Linode production server` (`done = 1`)
-2. `Test local trading bot telemetry` (`done = 0`)
-3. `Optimize Spring Boot memory footprint` (`done = 0`)
+---
+
+## 📸 Database Verification Screenshot
+
+![PostgreSQL DB Browser Screenshot](docs/postgres_db_screenshot.png)
+
+*Verification of containerized PostgreSQL tables (`\dt`) and table records (`SELECT * FROM tasks;`) inside `docker exec`.*
 
 ---
 
-## 📊 Database Viewer Screenshot & SQL Queries
+## 📑 API Reference & Endpoints Table
 
-### DB Browser for SQLite Screenshot
-![DB Browser for SQLite Screenshot](docs/db_browser_screenshot.png)
-
-### Example Executed SQL Queries
-```sql
--- 1. List all tasks
-SELECT * FROM tasks;
-
--- 2. Filter completed tasks
-SELECT * FROM tasks WHERE done = 1;
-
--- 3. Count total tasks
-SELECT COUNT(*) FROM tasks;
-
--- 4. Search tasks by title keyword
-SELECT * FROM tasks WHERE title LIKE '%telemetry%';
-
--- 5. Mark all tasks as completed
-UPDATE tasks SET done = 1;
-
--- 6. Delete all completed tasks
-DELETE FROM tasks WHERE done = 1;
-```
-
----
-
-## 🚀 Features & Endpoint Registry
-
-| Method | Path | Summary | Success Code | Error Codes |
+| Method | Endpoint | Description | Status Codes | Parameterized SQL |
 | :--- | :--- | :--- | :--- | :--- |
-| **GET** | `/` | Fetch service description & metadata | `200 OK` | - |
-| **GET** | `/health` | Live diagnostic health check | `200 OK` | - |
-| **GET** | `/stats` | Task count statistics (`total`, `completed`, `pending`) | `200 OK` | - |
-| **GET** | `/tasks` | Retrieve tasks (supports `?search=`, `?done=`, `?sort=title`) | `200 OK` | - |
-| **GET** | `/tasks/:id` | Fetch specific task by ID | `200 OK` | `400 Bad Request`, `404 Not Found` |
-| **POST** | `/tasks` | Create a new task (`{ "title": "..." }`) | `201 Created` | `400 Bad Request` |
-| **PUT** | `/tasks/:id` | Update task (`{ "title": "...", "done": true/false }`) | `200 OK` | `400 Bad Request`, `404 Not Found` |
-| **DELETE**| `/tasks/:id` | Delete task by ID | `204 No Content` | `400 Bad Request`, `404 Not Found` |
+| `GET` | `/` | API Metadata & Overview | `200` | — |
+| `GET` | `/health` | Application & Database Healthcheck | `200`, `500` | `SELECT 1` |
+| `GET` | `/tasks` | List all tasks (Search, Filter, Sort) | `200` | `SELECT * FROM tasks ...` |
+| `GET` | `/tasks/:id` | Get single task by ID | `200`, `400`, `404` | `WHERE id = $1` |
+| `POST` | `/tasks` | Create a new task | `201`, `400` | `INSERT ... RETURNING *` |
+| `PUT` | `/tasks/:id` | Update task title and completion | `200`, `400`, `404` | `UPDATE ... RETURNING *` |
+| `DELETE` | `/tasks/:id` | Delete task by ID | `204`, `400`, `404` | `DELETE ... RETURNING *` |
+| `GET` | `/stats` | Aggregate task statistics | `200` | `COUNT(*)` |
 
 ---
 
-## 🛠️ Getting Started
+## 🧪 Sample `curl -i` Execution Examples
 
-### 1. Prerequisites
-- Node.js (v16 or higher) installed on your system.
-
-### 2. Installation & Quick Start
-Clone the repository, install dependencies, and launch the API server:
-
+### 1. Retrieve All Tasks (`GET /tasks`)
 ```bash
-# Clone repository (if fresh clone)
-git clone <repo-url>
-cd flyrank-todo-api
+curl -i http://localhost:3000/tasks
+```
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
 
-# Install dependencies (express, better-sqlite3, swagger-ui-express)
-npm install
-
-# Start the server (automatically creates and seeds tasks.db)
-node server.js
+[
+  {"id":1,"title":"Configure Linode production server","done":true},
+  {"id":2,"title":"Test local trading bot telemetry","done":false},
+  {"id":3,"title":"Optimize Spring Boot memory footprint","done":false}
+]
 ```
 
-The server will start listening at `http://localhost:3000`.
-Dynamic Swagger UI interactive documentation is accessible at `http://localhost:3000/docs`.
+### 2. Create Task (`POST /tasks`)
+```bash
+curl -i -X POST http://localhost:3000/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Dockerize Node.js application"}'
+```
+```http
+HTTP/1.1 201 Created
+Content-Type: application/json; charset=utf-8
+
+{"id":4,"title":"Dockerize Node.js application","done":false}
+```
+
+### 3. Update Task (`PUT /tasks/2`)
+```bash
+curl -i -X PUT http://localhost:3000/tasks/2 \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test local trading bot telemetry","done":true}'
+```
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+
+{"id":2,"title":"Test local trading bot telemetry","done":true}
+```
+
+### 4. Delete Task (`DELETE /tasks/3`)
+```bash
+curl -i -X DELETE http://localhost:3000/tasks/3
+```
+```http
+HTTP/1.1 204 No Content
+```
+
+---
+
+## 🛠️ Data Persistence Proof
+
+To verify data persistence across a container and stack restart:
+
+1. Create a task via API: `POST /tasks` -> Returns ID 4.
+2. Stop stack: `docker compose down`
+3. Restart stack: `docker compose up -d`
+4. Query API: `GET /tasks` -> Task ID 4 is preserved due to volume `taskdata`.
+
+---
+
+## 📄 License
+ISC License. Built for FlyRank Backend Engineering Internship.
