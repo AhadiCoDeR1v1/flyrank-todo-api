@@ -1,32 +1,48 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+require('dotenv').config();
+const { Pool } = require('pg');
 
-// Connect to SQLite database (creates tasks.db if it doesn't exist)
-const dbPath = path.join(__dirname, 'tasks.db');
-const db = new Database(dbPath);
+const connectionString = process.env.DATABASE_URL || 'postgres://postgres:dev@localhost:5432/tasks';
 
-// Enable WAL mode for better performance
-db.pragma('journal_mode = WAL');
+const pool = new Pool({
+    connectionString,
+});
 
-// Stage 0: Create tasks table if it does not exist
-db.exec(`
-    CREATE TABLE IF NOT EXISTS tasks (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        done INTEGER NOT NULL DEFAULT 0
-    );
-`);
+// Stage 1: Auto-create table & seed initial tasks on boot
+const initDb = async () => {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS tasks (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                done BOOLEAN NOT NULL DEFAULT FALSE
+            );
+        `);
 
-// Seed initial example tasks ONLY if table is empty
-const rowCount = db.prepare('SELECT COUNT(*) as count FROM tasks').get().count;
+        const res = await pool.query('SELECT COUNT(*) FROM tasks');
+        const count = parseInt(res.rows[0].count, 10);
 
-if (rowCount === 0) {
-    console.log('Seeding initial example tasks into database...');
-    const insertTask = db.prepare('INSERT INTO tasks (title, done) VALUES (?, ?)');
-    
-    insertTask.run('Configure Linode production server', 1);
-    insertTask.run('Test local trading bot telemetry', 0);
-    insertTask.run('Optimize Spring Boot memory footprint', 0);
-}
+        if (count === 0) {
+            console.log('Seeding initial example tasks into PostgreSQL database...');
+            await pool.query(`
+                INSERT INTO tasks (title, done) VALUES
+                ($1, $2),
+                ($3, $4),
+                ($5, $6);
+            `, [
+                'Configure Linode production server', true,
+                'Test local trading bot telemetry', false,
+                'Optimize Spring Boot memory footprint', false
+            ]);
+        }
+    } catch (err) {
+        console.error('Error initializing PostgreSQL database:', err.message);
+    }
+};
 
-module.exports = db;
+// Run initialization
+initDb();
+
+module.exports = {
+    query: (text, params) => pool.query(text, params),
+    pool
+};
