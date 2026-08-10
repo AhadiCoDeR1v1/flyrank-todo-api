@@ -96,6 +96,29 @@ app.post('/auth/login', async (req, res) => {
     }
 });
 
+// --- PUBLIC & PROTECTED GATE ROUTES (Stage 2) ---
+
+// GET /public/info - Public route accessible by anyone without authentication
+app.get('/public/info', (req, res) => {
+    res.json({ message: "Welcome stranger! This info is public." });
+});
+
+// GET /protected/profile - Protected route requiring Authorization header check
+app.get('/protected/profile', (req, res) => {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: "Access token required" });
+    }
+
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+        return res.status(401).json({ error: "Access token required" });
+    }
+
+    res.json({ message: "Access token presented successfully", token_received: true });
+});
+
 
 app.get('/tasks', async (req, res) => {
     try {
