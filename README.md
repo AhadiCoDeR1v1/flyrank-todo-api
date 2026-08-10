@@ -1,19 +1,23 @@
-# FlyRank Todo API — Containerized Stack (Assignment A3)
+# FlyRank Todo API — Containerized Stack & Supabase Auth (Assignment A4)
 
-A high-performance RESTful Task Management API built with **Node.js**, **Express.js**, and **PostgreSQL** running in **Docker** orchestrating containerized storage via **Docker Compose**.
-
-This assignment completes the storage evolution:
-1. **Assignment A1**: In-memory storage array (*ephemeral*)
-2. **Assignment A2**: SQLite local file database (*disk-persisted*)
-3. **Assignment A3**: PostgreSQL containerized database server (*production-grade containerized persistence*)
-
-> **Core Architectural Principle:** The public REST API contract (`GET`, `POST`, `PUT`, `DELETE`) remains **100% identical**. Storage engine replacement required modifying only the repository module (`db.js`), proving that persistence is an implementation detail behind the API layer.
+A high-performance RESTful Task Management & Authentication API built with **Node.js**, **Express.js**, **PostgreSQL** (in Docker), and **Supabase Auth** for identity management, user registration, JWT verification, and protected routes.
 
 ---
 
-## ⚡ Quick Start: The One-Command Stack
+## 🚀 Architectural Evolution Across Assignments
 
-Start the entire application (Express API + PostgreSQL Database) with one single command:
+| Assignment | Storage Layer | Authentication | Persistence & Infrastructure |
+| :--- | :--- | :--- | :--- |
+| **A1** | In-Memory Array | Open (No Auth) | Ephemeral RAM |
+| **A2** | Local SQLite File | Open (No Auth) | Local disk file (`tasks.db`) |
+| **A3** | Containerized PostgreSQL | Open (No Auth) | Docker Compose (`taskdata` volume) |
+| **A4 (Current)** | Containerized PostgreSQL | Supabase Auth & Bearer JWT | Docker Compose + Supabase IdP |
+
+---
+
+## ⚡ Quick Start: One-Command Startup
+
+Start the full stack with one single command:
 
 ```bash
 # 1. Clone repository & enter directory
@@ -23,138 +27,121 @@ cd flyrank-todo-api
 # 2. Copy environment secrets template
 cp .env.example .env
 
-# 3. Start full containerized stack
+# 3. Fill in your Supabase credentials in .env
+# SUPABASE_URL=https://your-project.supabase.co
+# SUPABASE_KEY=your_anon_key
+
+# 4. Start containerized PostgreSQL & Express server
 docker compose up -d
 ```
 
 Access the application immediately at:
 - **API Base URL:** `http://localhost:3000`
-- **Interactive Swagger API Docs:** `http://localhost:3000/docs`
-- **Health & DB Check:** `http://localhost:3000/health`
+- **Interactive Swagger Docs (with Bearer Auth):** `http://localhost:3000/docs`
+- **Health Diagnostic Check:** `http://localhost:3000/health`
 
 ---
 
-## 🔑 Environment Configuration (`.env`)
+## 🔑 Environment Secrets & Security (`.env`)
 
-Database connection secrets are kept secure using environment variables and are **never** committed to version control (`.env` is added to `.gitignore`).
+Secrets are safely managed via environment variables and are **never** committed to version control (`.env` is listed in `.gitignore`).
 
-- `.env.example` *(committed template)*:
+- `.env.example` *(Committed template)*:
   ```env
   DATABASE_URL=postgres://postgres:dev@db:5432/tasks
   PORT=3000
+  SUPABASE_URL=your_supabase_project_url
+  SUPABASE_KEY=your_supabase_anon_key
   ```
-- `.env` *(local runtime secrets)*:
+- `.env` *(Local git-ignored secrets)*:
   ```env
-  DATABASE_URL=postgres://postgres:dev@172.17.0.1:5432/tasks
+  DATABASE_URL=postgres://postgres:dev@localhost:5433/tasks
   PORT=3000
+  SUPABASE_URL=https://rdkttsjwdlsfawmjazno.supabase.co
+  SUPABASE_KEY=eyJhbGciOiJIUzI1...
   ```
 
 ---
 
-## 🗄️ Database Architecture & Storage Scheme
+## 📑 Complete API Reference Table
 
-- **Database Engine:** PostgreSQL 16 Alpine container (`postgres:16-alpine`).
-- **Volume Mount:** `taskdata:/var/lib/postgresql/data` (ensures data survives container restarts).
-- **Auto-Initialization & Seeding:** On startup, `db.js` automatically creates the `tasks` table if missing and seeds 3 initial tasks idempotently if the table is empty.
-
-### PostgreSQL Table Schema (`tasks`)
-
-```sql
-CREATE TABLE IF NOT EXISTS tasks (
-    id SERIAL PRIMARY KEY,
-    title TEXT NOT NULL,
-    done BOOLEAN NOT NULL DEFAULT FALSE
-);
-```
-
----
-
-## 📸 Database Verification Screenshot
-
-![PostgreSQL DB Browser Screenshot](docs/postgres_db_screenshot.png)
-
-*Verification of containerized PostgreSQL tables (`\dt`) and table records (`SELECT * FROM tasks;`) inside `docker exec`.*
-
----
-
-## 📑 API Reference & Endpoints Table
-
-| Method | Endpoint | Description | Status Codes | Parameterized SQL |
+| Method | Endpoint | Description | Auth Required | Status Codes |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/` | API Metadata & Overview | `200` | — |
-| `GET` | `/health` | Application & Database Healthcheck | `200`, `500` | `SELECT 1` |
-| `GET` | `/tasks` | List all tasks (Search, Filter, Sort) | `200` | `SELECT * FROM tasks ...` |
-| `GET` | `/tasks/:id` | Get single task by ID | `200`, `400`, `404` | `WHERE id = $1` |
-| `POST` | `/tasks` | Create a new task | `201`, `400` | `INSERT ... RETURNING *` |
-| `PUT` | `/tasks/:id` | Update task title and completion | `200`, `400`, `404` | `UPDATE ... RETURNING *` |
-| `DELETE` | `/tasks/:id` | Delete task by ID | `204`, `400`, `404` | `DELETE ... RETURNING *` |
-| `GET` | `/stats` | Aggregate task statistics | `200` | `COUNT(*)` |
+| `GET` | `/` | API Metadata & Overview | No | `200` |
+| `GET` | `/health` | Application & Database Healthcheck | No | `200`, `500` |
+| `POST` | `/auth/signup` | Register new account with Supabase | No | `201`, `400` |
+| `POST` | `/auth/login` | Authenticate & return Bearer JWT | No | `200`, `400`, `401` |
+| `POST` | `/auth/logout` | End user session | **Yes** (`Bearer JWT`) | `204`, `401` |
+| `GET` | `/public/info` | Public open data endpoint | No | `200` |
+| `GET` | `/protected/profile` | Read authenticated profile metadata | **Yes** (`Bearer JWT`) | `200`, `401` |
+| `GET` | `/protected/dashboard` | Access personal user dashboard | **Yes** (`Bearer JWT`) | `200`, `401` |
+| `GET` | `/tasks` | List all tasks (search/filter/sort) | No | `200` |
+| `POST` | `/tasks` | Create a new task item | No | `201`, `400` |
+| `PUT` | `/tasks/:id` | Update an existing task item | No | `200`, `400`, `404` |
+| `DELETE` | `/tasks/:id` | Erase a task item by ID | No | `204`, `404` |
 
 ---
 
-## 🧪 Sample `curl -i` Execution Examples
+## 🧪 Auth Verification Examples (`curl -i`)
 
-### 1. Retrieve All Tasks (`GET /tasks`)
+### 1. Register User (`POST /auth/signup`)
 ```bash
-curl -i http://localhost:3000/tasks
-```
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=utf-8
-
-[
-  {"id":1,"title":"Configure Linode production server","done":true},
-  {"id":2,"title":"Test local trading bot telemetry","done":false},
-  {"id":3,"title":"Optimize Spring Boot memory footprint","done":false}
-]
-```
-
-### 2. Create Task (`POST /tasks`)
-```bash
-curl -i -X POST http://localhost:3000/tasks \
+curl -i -X POST http://localhost:3000/auth/signup \
   -H "Content-Type: application/json" \
-  -d '{"title":"Dockerize Node.js application"}'
+  -d '{"email":"developer@flyrank.com","password":"StrongPassword123!"}'
 ```
 ```http
 HTTP/1.1 201 Created
 Content-Type: application/json; charset=utf-8
 
-{"id":4,"title":"Dockerize Node.js application","done":false}
+{"user":{"id":"39c1aa8f-6488...","email":"developer@flyrank.com"}}
 ```
 
-### 3. Update Task (`PUT /tasks/2`)
+### 2. Log In & Receive JWT Access Token (`POST /auth/login`)
 ```bash
-curl -i -X PUT http://localhost:3000/tasks/2 \
+curl -i -X POST http://localhost:3000/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"title":"Test local trading bot telemetry","done":true}'
+  -d '{"email":"developer@flyrank.com","password":"StrongPassword123!"}'
 ```
 ```http
 HTTP/1.1 200 OK
 Content-Type: application/json; charset=utf-8
 
-{"id":2,"title":"Test local trading bot telemetry","done":true}
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6...",
+  "user": {"id":"39c1aa8f-6488...","email":"developer@flyrank.com"}
+}
 ```
 
-### 4. Delete Task (`DELETE /tasks/3`)
+### 3. Call Protected Profile Endpoint (`GET /protected/profile`)
 ```bash
-curl -i -X DELETE http://localhost:3000/tasks/3
+curl -i http://localhost:3000/protected/profile \
+  -H "Authorization: Bearer <PASTE_ACCESS_TOKEN_HERE>"
 ```
 ```http
-HTTP/1.1 204 No Content
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+
+{"user":{"id":"39c1aa8f-6488...","email":"developer@flyrank.com"}}
+```
+
+### 4. Forged / Missing Token Test (`401 Unauthorized`)
+```bash
+curl -i http://localhost:3000/protected/profile \
+  -H "Authorization: Bearer invalid_tampered_token"
+```
+```http
+HTTP/1.1 401 Unauthorized
+
+{"error":"Invalid or expired token"}
 ```
 
 ---
 
-## 🛠️ Data Persistence Proof
+## 🔒 Swagger UI Bearer Authorization (`/docs`)
 
-To verify data persistence across a container and stack restart:
-
-1. Create a task via API: `POST /tasks` -> Returns ID 4.
-2. Stop stack: `docker compose down`
-3. Restart stack: `docker compose up -d`
-4. Query API: `GET /tasks` -> Task ID 4 is preserved due to volume `taskdata`.
-
----
-
-## 📄 License
-ISC License. Built for FlyRank Backend Engineering Internship.
+Swagger UI is configured with `securitySchemes` for OpenAPI 3.0:
+1. Open `http://localhost:3000/docs` in your browser.
+2. Click the green **Authorize 🔓** button at the top right.
+3. Paste your Supabase JWT `access_token` into the Value field and click **Authorize**.
+4. Test protected endpoints (`/protected/profile`, `/protected/dashboard`, `/auth/logout`) directly from the browser!
