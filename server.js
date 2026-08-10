@@ -42,6 +42,60 @@ app.get('/health', async (req, res) => {
     }
 });
 
+// --- AUTHENTICATION ROUTES (Stage 1) ---
+
+// POST /auth/signup - Register a new user account with Supabase
+app.post('/auth/signup', async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    try {
+        const { data, error } = await supabase.auth.signUp({
+            email: email.trim(),
+            password: password
+        });
+
+        if (error) {
+            return res.status(400).json({ error: error.message });
+        }
+
+        res.status(201).json(data);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /auth/login - Authenticate user credentials & return JWT access token
+app.post('/auth/login', async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password || typeof email !== 'string' || typeof password !== 'string') {
+        return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    try {
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email: email.trim(),
+            password: password
+        });
+
+        if (error || !data.session) {
+            return res.status(401).json({ error: error ? error.message : "Invalid login credentials" });
+        }
+
+        res.json({
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token,
+            user: data.user
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 
 app.get('/tasks', async (req, res) => {
     try {
