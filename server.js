@@ -1,15 +1,26 @@
 const express = require('express');
 const swaggerUi = require('swagger-ui-express');   // Import UI rendering library
 const swaggerDocument = require('./openapi.json');
+const { createClient } = require('@supabase/supabase-js');
 const app = express();
-const PORT = 3000;
-
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 const db = require('./db');
+
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.error('ERROR: SUPABASE_URL and SUPABASE_KEY must be set in .env');
+    process.exit(1);
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+console.log('Server initialized and connected to Supabase');
 
 // Helper to format database task row into API response structure
 const formatTask = (row) => ({
