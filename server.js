@@ -42,7 +42,37 @@ app.get('/health', async (req, res) => {
     }
 });
 
-// --- AUTHENTICATION ROUTES (Stage 1) ---
+// --- REUSABLE AUTHENTICATION MIDDLEWARE (Stage 4) ---
+
+// Middleware guard to verify Supabase JWT bearer tokens
+const requireAuth = async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: "Access token required" });
+    }
+
+    const token = authHeader.split(' ')[1];
+    if (!token) {
+        return res.status(401).json({ error: "Access token required" });
+    }
+
+    try {
+        const { data, error } = await supabase.auth.getUser(token);
+
+        if (error || !data.user) {
+            return res.status(401).json({ error: "Invalid or expired token" });
+        }
+
+        req.user = data.user;
+        req.token = token;
+        next();
+    } catch (err) {
+        return res.status(401).json({ error: "Invalid or expired token" });
+    }
+};
+
+// --- AUTHENTICATION ROUTES (Stage 1 & Stage 4) ---
 
 // POST /auth/signup - Register a new user account with Supabase
 app.post('/auth/signup', async (req, res) => {
@@ -96,43 +126,43 @@ app.post('/auth/login', async (req, res) => {
     }
 });
 
-// --- PUBLIC & PROTECTED GATE ROUTES (Stage 2) ---
+// POST /auth/logout - End the user's session (Protected by requireAuth)
+app.post('/auth/logout', requireAuth, async (req, res) => {
+    try {
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+            return res.status(500).json({ error: error.message });
+        }
+        res.status(204).send();
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// --- PUBLIC & PROTECTED GATE ROUTES ---
 
 // GET /public/info - Public route accessible by anyone without authentication
 app.get('/public/info', (req, res) => {
     res.json({ message: "Welcome stranger! This info is public." });
 });
 
-// GET /protected/profile - Protected route with Supabase JWT verification (Stage 3)
-app.get('/protected/profile', async (req, res) => {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: "Access token required" });
-    }
-
-    const token = authHeader.split(' ')[1];
-    if (!token) {
-        return res.status(401).json({ error: "Access token required" });
-    }
-
-    try {
-        const { data, error } = await supabase.auth.getUser(token);
-
-        if (error || !data.user) {
-            return res.status(401).json({ error: "Invalid or expired token" });
+// GET /protected/profile - Protected route using requireAuth middleware
+app.get('/protected/profile', requireAuth, (req, res) => {
+    res.json({
+        user: {
+            id: req.user.id,
+            email: req.user.email,
+            created_at: req.user.created_at
         }
+    });
+});
 
-        res.json({
-            user: {
-                id: data.user.id,
-                email: data.user.email,
-                created_at: data.user.created_at
-            }
-        });
-    } catch (err) {
-        res.status(401).json({ error: "Invalid or expired token" });
-    }
+// GET /protected/dashboard - Second protected route using requireAuth middleware
+app.get('/protected/dashboard', requireAuth, (req, res) => {
+    res.json({
+        message: `Welcome to your personal dashboard, ${req.user.email}!`,
+        user_id: req.user.id
+    });
 });
 
 
