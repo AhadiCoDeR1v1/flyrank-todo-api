@@ -216,6 +216,73 @@
                     "404": { "description": "Task not found" }
                 }
             }
+        },
+        "/triage": {
+            "post": {
+                "summary": "AI Support & Task Triage Classifier",
+                "description": "Evaluates unstructured incoming message or task, queries LLM spec with repair retry and Zod schema validation, and returns structured classification JSON.",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "text": {
+                                        "type": "string",
+                                        "description": "Unstructured customer message or task description (1-2000 chars)",
+                                        "example": "I need help with my monthly invoice, I was charged twice for pro tier"
+                                    }
+                                },
+                                "required": ["text"]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Structured validated JSON triage result",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "category": {
+                                            "type": "string",
+                                            "enum": ["billing", "bug", "feature", "other"]
+                                        },
+                                        "urgency": {
+                                            "type": "string",
+                                            "enum": ["low", "normal", "high"]
+                                        },
+                                        "confidence": {
+                                            "type": "number",
+                                            "minimum": 0.0,
+                                            "maximum": 1.0
+                                        },
+                                        "reason": {
+                                            "type": "string"
+                                        }
+                                    },
+                                    "required": ["category", "urgency", "confidence", "reason"]
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error (missing field, wrong type, empty or >2000 chars)"
+                    },
+                    "422": {
+                        "description": "Unprocessable Entity (model output failed validation after repair retry, quarantined)"
+                    },
+                    "503": {
+                        "description": "Service Unavailable (LLM kill switch active or provider outage)"
+                    },
+                    "504": {
+                        "description": "Gateway Timeout (LLM call exceeded 30s timeout)"
+                    }
+                }
+            }
         }
     }
 }

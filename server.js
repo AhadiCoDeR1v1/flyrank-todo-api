@@ -1,13 +1,17 @@
+require('dotenv').config();
 const express = require('express');
 const swaggerUi = require('swagger-ui-express');   // Import UI rendering library
 const swaggerDocument = require('./openapi.json');
 const { createClient } = require('@supabase/supabase-js');
+const triageRouter = require('./src/routes/triage');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+app.use('/triage', triageRouter);
 
 const db = require('./db');
 
