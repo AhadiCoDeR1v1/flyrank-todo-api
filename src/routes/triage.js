@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const { TriageInputSchema, STUB_TRIAGE_RESPONSE, FALLBACK_TRIAGE_RESPONSE } = require('../llm/schema');
+const { triageMessage } = require('../llm/triage');
 
 // POST /triage - Classify message / task with structured output
 router.post('/', async (req, res) => {
-    // 1. Validate input before spending any LLM calls
+    // 1. Validate input before spending any LLM calls (Reject early with 400)
     const inputResult = TriageInputSchema.safeParse(req.body);
     if (!inputResult.success) {
         const firstIssue = inputResult.error.issues[0];
@@ -18,28 +19,27 @@ router.post('/', async (req, res) => {
 
     const { text } = inputResult.data;
 
-    // 2. Kill switch check (Stage 4)
+    // 2. Kill switch check (LLM_ENABLED=false)
     if (process.env.LLM_ENABLED === 'false' || process.env.LLM_ENABLED === '0') {
-        return res.json(FALLBACK_TRIAGE_RESPONSE);
+        return res.status(200).json(FALLBACK_TRIAGE_RESPONSE);
     }
 
-    // 3. Stub mode check (Stage 1)
+    // 3. Stub mode check (LLM_STUB=1)
     if (process.env.LLM_STUB === '1' || process.env.LLM_STUB === 'true') {
-        return res.json(STUB_TRIAGE_RESPONSE);
+        return res.status(200).json(STUB_TRIAGE_RESPONSE);
     }
 
-    // In Stage 1, fallback to stub mode response if triage engine isn't wired yet
+    // 4. Delegate to LLM triage engine (with timeout, retry, repair retry & quarantine)
     try {
-        const triageEngine = require('../llm/triage');
-        if (triageEngine && typeof triageEngine.triageMessage === 'function') {
-            const result = await triageEngine.triageMessage(text);
-            return res.status(result.status || 200).json(result.data);
-        }
-    } catch (e) {
-        // Triage engine not implemented yet in Stage 1
+        const result = await triageMessage(text);
+        return res.status(result.status || 200).json(result.data);
+    } catch (err) {
+        console.error("Unexpected error in /triage handler:", err);
+        return res.status(500).json({
+            error: "Internal Server Error",
+            message: "An unexpected error occurred while processing triage request."
+        });
     }
-
-    return res.json(STUB_TRIAGE_RESPONSE);
 });
 
 module.exports = router;
