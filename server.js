@@ -3,7 +3,11 @@ const express = require('express');
 const swaggerUi = require('swagger-ui-express');   // Import UI rendering library
 const swaggerDocument = require('./openapi.json');
 const { createClient } = require('@supabase/supabase-js');
+const { serve } = require('inngest/express');
+const { inngest } = require('./src/inngest/client');
+const { sayHello, makeReport, heartbeat, cleanupCron } = require('./src/inngest/functions');
 const triageRouter = require('./src/routes/triage');
+const reportsRouter = require('./src/routes/reports');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -12,6 +16,16 @@ app.use(express.json());
 
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 app.use('/triage', triageRouter);
+app.use('/reports', reportsRouter);
+
+// Inngest Background Job Engine Handler
+app.use(
+    '/api/inngest',
+    serve({
+        client: inngest,
+        functions: [sayHello, makeReport, heartbeat, cleanupCron]
+    })
+);
 
 const db = require('./db');
 
@@ -34,16 +48,31 @@ const formatTask = (row) => ({
 });
 
 app.get('/', (req, res) => {
-    res.json({ name: "Task API", version: "1.0", endpoints: ["/tasks"] });
+    res.json({
+        name: "FlyRank Backend API",
+        version: "2.0",
+        endpoints: [
+            "/tasks",
+            "/reports",
+            "/triage",
+            "/auth/signup",
+            "/auth/login",
+            "/auth/logout",
+            "/health",
+            "/docs",
+            "/api/inngest"
+        ]
+    });
 });
 
 app.get('/health', async (req, res) => {
+    let dbStatus = "ok";
     try {
         await db.query('SELECT 1');
-        res.json({ status: "ok", db: "ok" });
     } catch (err) {
-        res.status(500).json({ status: "error", db: err.message });
+        dbStatus = "offline";
     }
+    res.status(200).json({ status: "ok", db: dbStatus });
 });
 
 // --- REUSABLE AUTHENTICATION MIDDLEWARE (Stage 4) ---
