@@ -274,6 +274,7 @@ All automated test suites executed with 100% pass rates:
 ## 8. Git Commit Log
 
 ```
+* Extras: list endpoint, outbox file, cleanup cron, idempotency & concurrency
 * Stage 6: AI vs me (quarantined AI evaluation, prompt comparisons, diff matrix)
 * Stage 5: publish and docs (complete README, openapi specs, submission report)
 * Stage 4: cron heartbeat (scheduled * * * * * background monitor)
@@ -281,5 +282,127 @@ All automated test suites executed with 100% pass rates:
 * Stage 2: 202 + background job + status endpoint (make-report with 8s sleep, polling, eventual consistency)
 * Stage 1: Inngest connected, first function runs (say-hello, /api/inngest serve handler)
 * Stage 0: hello server (Express baseline on port 3000, /health endpoint)
-* Extras: control panel GET /reports, outbox text file, cleanup cron, idempotency & concurrency limiter
 ```
+
+---
+
+## 9. 📸 Step-by-Step Guide for Taking & Inserting Assignment Screenshots
+
+Follow these exact steps to generate and capture the required visual proofs for your final submission:
+
+```
++──────────────────────────────────────────────────────────────────────────────────────────────────+
+|                                    REQUIRED SCREENSHOT CHECKLIST                                 |
++──────────────────────────────────────────────────────────────────────────────────────────────────+
+|  [ ] 1. Inngest Dev Server & Functions Overview (`docs/inngest_functions_dashboard.png`)         |
+|  [ ] 2. Stage 1: `say-hello` 5-second sleep step completed (`docs/stage1_say_hello_completed.png`)|
+|  [ ] 3. Stage 2: `make-report` 8-second execution & status poll (`docs/stage2_make_report.png`)  |
+|  [ ] 4. Stage 3: `make-report` 3x retry backoff & Failed run (`docs/stage3_retry_failure.png`)   |
+|  [ ] 5. Stage 4: `heartbeat` cron 2+ runs 1 minute apart (`docs/stage4_heartbeat_cron_runs.png`) |
+|  [ ] 6. Verification Test Suite: 100% Passing Output (`docs/test_suite_verification.png`)       |
++──────────────────────────────────────────────────────────────────────────────────────────────────+
+```
+
+### 🔹 Screenshot 1: Inngest Functions & Dashboard Overview
+- **Objective:** Prove the Inngest Dev Server is connected to your API at `http://localhost:3000/api/inngest`.
+- **How to Take:**
+  1. Open **Terminal 1** and start the API: `npm start`
+  2. Open **Terminal 2** and start Inngest: `npm run inngest:dev`
+  3. Open your browser to `http://localhost:8288`
+  4. Click on the **Functions** tab in the sidebar.
+  5. Take a screenshot showing all four registered functions: `say-hello`, `make-report`, `heartbeat`, and `cleanup-old-reports`.
+  6. Save image to: `docs/inngest_functions_dashboard.png`
+- **Markdown Placeholder:**
+  ```markdown
+  ![Inngest Functions Dashboard](docs/inngest_functions_dashboard.png)
+  ```
+
+---
+
+### 🔹 Screenshot 2: Stage 1 — `say-hello` Background Execution
+- **Objective:** Show the `say-hello` function executing its 5-second sleep step and completing successfully.
+- **How to Take:**
+  1. On `http://localhost:8288`, click on the `say-hello` function.
+  2. Click the **"Invoke"** (or **"Test"**) button in the top right corner.
+  3. Watch the timeline: you will see step `wait-5-seconds` sleep for 5 seconds, followed by `Completed` status with output `"Hello from the background!"`.
+  4. Take a screenshot of the run detail timeline.
+  5. Save image to: `docs/stage1_say_hello_completed.png`
+- **Markdown Placeholder:**
+  ```markdown
+  ![Stage 1 say-hello Run](docs/stage1_say_hello_completed.png)
+  ```
+
+---
+
+### 🔹 Screenshot 3: Stage 2 — `make-report` (Happy Path) & Polling
+- **Objective:** Show the 8-second sleep step, report generation, and status transition from `pending` to `done`.
+- **How to Take:**
+  1. In a terminal, send a report request:
+     ```bash
+     curl -i -X POST http://localhost:3000/reports -H "Content-Type: application/json" -d '{"topic": "cats"}'
+     ```
+  2. Copy the returned `id` (e.g. `rep_...`) and poll immediately:
+     ```bash
+     curl -i http://localhost:3000/reports/<your_id>
+     ```
+  3. Wait 10 seconds and poll again to see status `done`.
+  4. Open `http://localhost:8288` -> **Runs** -> click the latest `make-report` run.
+  5. Take a screenshot of the run timeline showing step 1 `do-the-slow-work` (8s) and step 2 `build-report` ending in `Completed`.
+  6. Save image to: `docs/stage2_make_report_success.png`
+- **Markdown Placeholder:**
+  ```markdown
+  ![Stage 2 make-report Run](docs/stage2_make_report_success.png)
+  ```
+
+---
+
+### 🔹 Screenshot 4: Stage 3 — Fault Injection & 3x Retry Backoff
+- **Objective:** Show topic `"fail"` failing with `"The report oven is broken!"`, executing 3 attempts with backoff, and ending in `Failed`.
+- **How to Take:**
+  1. In your terminal, trigger a failing report:
+     ```bash
+     curl -i -X POST http://localhost:3000/reports -H "Content-Type: application/json" -d '{"topic": "fail"}'
+     ```
+  2. Open `http://localhost:8288` -> **Runs** -> click on the newly triggered `make-report` run.
+  3. Watch the dashboard:
+     - **Attempt 1:** Runs `do-the-slow-work` → fails `build-report` → status Retrying.
+     - **Attempt 2:** Executes after backoff wait → fails again.
+     - **Attempt 3:** Final retry executes → fails → run marked **`Failed`**.
+  4. Take a screenshot showing the attempts list and error details.
+  5. Save image to: `docs/stage3_retry_failure_dashboard.png`
+- **Markdown Placeholder:**
+  ```markdown
+  ![Stage 3 Retry Backoff Failure](docs/stage3_retry_failure_dashboard.png)
+  ```
+
+---
+
+### 🔹 Screenshot 5: Stage 4 — `heartbeat` Cron Runs (1 Minute Apart)
+- **Objective:** Show two or more consecutive cron runs triggered on the clock alone.
+- **How to Take:**
+  1. Open `http://localhost:8288` -> **Functions** -> click on `heartbeat` (or go to **Runs** and filter by `heartbeat`).
+  2. Leave the dev server running for 2–3 minutes so multiple automatic cron executions complete.
+  3. Take a screenshot showing the list of runs spaced exactly 1 minute apart with the logged report summary.
+  4. Save image to: `docs/stage4_heartbeat_cron_runs.png`
+- **Markdown Placeholder:**
+  ```markdown
+  ![Stage 4 Heartbeat Cron Runs](docs/stage4_heartbeat_cron_runs.png)
+  ```
+
+---
+
+### 🔹 Screenshot 6: Automated Test Suite 100% Verification
+- **Objective:** Show clean automated test validation across all assignment requirements.
+- **How to Take:**
+  1. In your terminal, run:
+     ```bash
+     node evals/test-background-jobs.js
+     node evals/test-inngest-execution.js
+     ```
+  2. Take a screenshot of the terminal showing all green checkmarks and `18 / 18 Verification Assertions Passed`.
+  3. Save image to: `docs/test_suite_verification.png`
+- **Markdown Placeholder:**
+  ```markdown
+  ![Test Suite Verification](docs/test_suite_verification.png)
+  ```
+
