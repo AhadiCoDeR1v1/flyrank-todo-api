@@ -283,6 +283,78 @@
                     }
                 }
             }
+        },
+        "/reports": {
+            "post": {
+                "summary": "Fast door background report submission (returns 202 Accepted)",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "topic": {
+                                        "type": "string",
+                                        "example": "cats"
+                                    }
+                                },
+                                "required": ["topic"]
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "202": {
+                        "description": "Accepted - background job initiated",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string" },
+                                        "status": { "type": "string", "example": "pending" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Validation error (missing or empty topic)"
+                    }
+                }
+            },
+            "get": {
+                "summary": "Control panel listing of all reports and aggregate statistics",
+                "responses": {
+                    "200": {
+                        "description": "List of all reports and status metrics"
+                    }
+                }
+            }
+        },
+        "/reports/{id}": {
+            "get": {
+                "summary": "Poll status and retrieve generated background report",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Report status object (pending, done, or failed)"
+                    },
+                    "404": {
+                        "description": "Report ID not found"
+                    }
+                }
+            }
         }
     }
 }

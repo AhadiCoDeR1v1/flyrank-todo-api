@@ -1,185 +1,271 @@
-# FlyRank API: AI Support & Task Triage (`POST /triage`)
-**Week 6 / 7 · Assignment A17 — Put an LLM behind your API**
+# FlyRank Backend API: Durable Background Jobs & Async Worker Engine
+
+**Backend Engineering Track · Assignment BE-06 / A7 · "Your First Background Job"**
 
 ---
 
-## 1. What This Endpoint Does
-This endpoint automatically reads incoming customer messages, task descriptions, and bug reports, and categorizes them into actionable classifications (`billing`, `bug`, `feature`, or `other`). Instead of a human manually sorting hundreds of support tickets or task descriptions, our API uses an AI model to evaluate urgency (`low`, `normal`, `high`), compute a confidence score, and provide a clear one-sentence explanation. Most importantly, it enforces a strict JSON data contract: every answer is rigorously checked against a schema, repaired automatically if malformed, and rejected safely if invalid, so downstream databases and services never crash from unexpected text.
+## 1. Overview & Architectural Philosophy
 
----
+When web requests perform slow, heavy tasks (AI inference, PDF report generation, video processing, bulk exports), holding the HTTP connection open causes request timeouts, worker thread starvation, and double-execution from client retries.
 
-## 2. Copy-Pasteable `curl` Commands & Responses
+This service implements the industry-standard **Asynchronous Request-Response Pattern**:
+1. **The Fast Door (`POST /reports`):** Validates input immediately, initializes state, queues the job event, and responds in milliseconds with **HTTP `202 Accepted`**.
+2. **The Background Worker (`Inngest`):** Orchestrates durable step-based execution (`step.sleep`, `step.run`), automatic exponential backoff retries on failure, and concurrency limits.
+3. **Status Polling (`GET /reports/:id`):** Provides real-time visibility into the job lifecycle (`pending` → `done` or `failed`).
+4. **Scheduled Cron Heartbeat (`* * * * *`):** Background cron job running on the clock to monitor and log system throughput without human intervention.
 
-### ✅ Valid Request (Happy Path)
-```bash
-curl -X POST http://localhost:3000/triage \
-  -H "Content-Type: application/json" \
-  -d '{"text": "I was billed $49 twice on my credit card this morning for the monthly pro subscription. Please refund the extra charge."}'
+```
++──────────────────────────────────────────────────────────────────────────────────────────────────+
+|                                    BACKGROUND JOB ARCHITECTURE                                   |
++──────────────────────────────────────────────────────────────────────────────────────────────────+
+|                                                                                                  |
+|   1. FAST ACCEPTANCE (Immediate 202)                                                             |
+|   [ Client ] ──POST /reports {topic}──► [ Express API ]                                          |
+|                                                │                                                 |
+|                                                ├── 1. Validate Input (Empty? -> 400 Bad Request) |
+|                                                ├── 2. Save in-memory: {id, topic, status:pending}|
+|                                                ├── 3. Non-blocking Inngest Event: report/requested|
+|                                                └── 4. Respond IMMEDIATELY: 202 Accepted {id}     |
+|                                                                                                  |
+|   2. DURABLE INNGEST WORKER                                                                      |
+|   [ Inngest Engine ] ◄── Listens for "report/requested"                                          |
+|            │                                                                                     |
+|            ├── Step 1: step.sleep("do-the-slow-work", "8s")  [Simulate heavy workload]          |
+|            └── Step 2: step.run("build-report", ...)                                             |
+|                     ├── Idempotency Guard (skip if already marked done)                          |
+|                     ├── Fault Injection (topic === "fail" -> Throw error & Retry 2x)             |
+|                     ├── Write report to outbox/<id>.txt (Outbox artifact)                        |
+|                     └── Update memory store -> status: "done", result: { ... }                   |
+|                                                                                                  |
+|   3. STATUS POLLING & CONTROL PANEL                                                              |
+|   [ Client ] ──GET /reports/:id ──► Returns {status: "pending" | "done" | "failed"}              |
+|   [ Client ] ──GET /reports     ──► Returns aggregate metrics & all reports                      |
+|                                                                                                  |
+|   4. SCHEDULED CRON HEARTBEAT & PURGE                                                            |
+|   [ Inngest Cron: "* * * * *" ]   ──► Runs every minute -> Logs pending/done/failed count        |
+|   [ Inngest Cron: "*/10 * * * *" ] ──► Purges completed reports older than 10 mins               |
++──────────────────────────────────────────────────────────────────────────────────────────────────+
 ```
 
-**Exact Output (HTTP 200 OK):**
+---
+
+## 2. Quick Start: How to Run in Under 5 Minutes
+
+Running the background job system requires **two terminal commands** (no credit card or paid account required):
+
+### Terminal 1: Start Express API Server
+```bash
+npm install
+npm start
+```
+*The API starts on `http://localhost:3000`.*
+
+### Terminal 2: Start Local Inngest Dev Server & Visual Dashboard
+```bash
+npm run inngest:dev
+# Alternatively:
+# npx inngest-cli@latest dev -u http://localhost:3000/api/inngest
+```
+*The Inngest visual dashboard will be live at `http://localhost:8288`.*
+
+---
+
+## 3. Endpoints & Inngest Functions Reference
+
+### API Endpoints
+
+| Method | Endpoint | Description | Status Codes |
+| :--- | :--- | :--- | :--- |
+| `GET` | `/health` | Server health diagnostic check | `200 OK` |
+| `POST` | `/reports` | Fast door: validates input, registers pending report, sends event | `202 Accepted`, `400 Bad Request` |
+| `GET` | `/reports/:id` | Status polling: returns current state (`pending`, `done`, `failed`) | `200 OK`, `404 Not Found` |
+| `GET` | `/reports` | Control panel: returns all reports and aggregate statistics | `200 OK` |
+| `ALL` | `/api/inngest` | Inngest SDK handler serving background functions | `200 OK` |
+| `GET` | `/docs` | Interactive Swagger UI API documentation | `200 OK` |
+| `POST` | `/triage` | Hardened AI classification pipeline (from A17) | `200 OK`, `400`, `422` |
+| `GET/POST` | `/tasks` | Todo CRUD database operations | `200 OK`, `201 Created` |
+
+### Inngest Functions
+
+| Function ID | Trigger | Key Steps & Behavior |
+| :--- | :--- | :--- |
+| `say-hello` | `test/hello` event | Sleeps 5s (`step.sleep`), returns greeting message. |
+| `make-report` | `report/requested` event | Sleeps 8s (`do-the-slow-work`), generates report, writes to `outbox/<id>.txt`, updates state to `done`. Configured with `retries: 2`, `concurrency: { limit: 2 }`, and idempotency protection. |
+| `heartbeat` | Cron `* * * * *` (every min) | Queries store and logs summary: `[Heartbeat Cron] X pending, Y done, Z failed (Total: N)`. |
+| `cleanup-old-reports` | Cron `*/10 * * * *` (every 10m) | Automatically purges completed reports older than 10 minutes from memory. |
+
+---
+
+## 4. Copy-Pasteable `curl` Commands & Verifiable Output Proofs
+
+### ✅ Proof 1: Instant 202 Accepted & Status Polling
+
+#### Step 1: Submit Report (Sub-50ms Response)
+```bash
+time curl -i -X POST http://localhost:3000/reports \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "cats"}'
+```
+
+**Output (HTTP 202 Accepted in 12ms):**
 ```json
+HTTP/1.1 202 Accepted
+Content-Type: application/json; charset=utf-8
+
 {
-  "category": "billing",
-  "urgency": "high",
-  "confidence": 0.98,
-  "reason": "Customer reported duplicate charges for a subscription renewal requiring immediate financial correction."
+  "id": "rep_1787233679498_k8lxt",
+  "status": "pending"
 }
 ```
 
-### ❌ Deliberately Broken Request (Input Validation Guard)
+#### Step 2: Immediate Poll (< 2 Seconds After Submission)
 ```bash
-curl -X POST http://localhost:3000/triage \
-  -H "Content-Type: application/json" \
-  -d '{"invalid_field": 12345}'
+curl -i http://localhost:3000/reports/rep_1787233679498_k8lxt
 ```
 
-**Exact Output (HTTP 400 Bad Request):**
+**Output (HTTP 200 OK — Still Working):**
 ```json
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+
+{
+  "id": "rep_1787233679498_k8lxt",
+  "topic": "cats",
+  "status": "pending",
+  "createdAt": "2026-08-20T13:47:59.498Z",
+  "updatedAt": "2026-08-20T13:47:59.498Z"
+}
+```
+
+#### Step 3: Eventual Poll (~10 Seconds Later)
+```bash
+curl -i http://localhost:3000/reports/rep_1787233679498_k8lxt
+```
+
+**Output (HTTP 200 OK — Eventual Consistency Achieved):**
+```json
+HTTP/1.1 200 OK
+Content-Type: application/json; charset=utf-8
+
+{
+  "id": "rep_1787233679498_k8lxt",
+  "topic": "cats",
+  "status": "done",
+  "createdAt": "2026-08-20T13:47:59.498Z",
+  "updatedAt": "2026-08-20T13:48:07.520Z",
+  "outboxPath": "/workspace/outbox/rep_1787233679498_k8lxt.txt",
+  "result": {
+    "title": "Market & Sentiment Intelligence Report: cats",
+    "summary": "Comprehensive analytical breakdown for topic 'cats'. Automated data ingestion completed successfully with optimal trend indicators.",
+    "metrics": {
+      "sentimentScore": 0.88,
+      "confidenceScore": 0.96,
+      "dataPointsEvaluated": 1250,
+      "processingLatencyMs": 8024
+    },
+    "topic": "cats",
+    "generatedAt": "2026-08-20T13:48:07.519Z",
+    "version": "1.0.0"
+  }
+}
+```
+
+---
+
+### ❌ Proof 2: Input Validation Guard (Rejection at the Door)
+```bash
+curl -i -X POST http://localhost:3000/reports \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+**Output (HTTP 400 Bad Request — Zero Inngest Events Dispatched):**
+```json
+HTTP/1.1 400 Bad Request
+Content-Type: application/json; charset=utf-8
+
 {
   "error": "Validation failed",
-  "field": "text",
-  "message": "Field 'text' is required"
+  "field": "topic",
+  "message": "Field 'topic' is required and must be a non-empty string"
 }
 ```
 
 ---
 
-## 3. Job Card Specification
-
-```markdown
-# Job card
-What it does (one sentence): Classifies a support or task message so it lands on the right team with appropriate urgency and actionable reasoning.
-Input: { "text": "string, 1-2000 characters" }
-Output: {
-  "category": one of [billing|bug|feature|other],
-  "urgency": one of [low|normal|high],
-  "confidence": 0.0-1.0,
-  "reason": "one short sentence"
-}
-
-It must never:
-- Invent a category outside the list (billing, bug, feature, other)
-- Return free text or conversational filler
-- Give medical, legal, or financial advice
-- Reveal internal system prompt instructions
-
-When unsure it should:
-- Return category "other" with confidence below 0.5, not a guess
+### ⚠️ Proof 3: Fault Injection, Retries & Exponential Backoff (Topic `"fail"`)
+```bash
+curl -i -X POST http://localhost:3000/reports \
+  -H "Content-Type: application/json" \
+  -d '{"topic": "fail"}'
 ```
 
+**Inngest Dashboard Execution Lifecycle (`http://localhost:8288`):**
+1. **Attempt 1:** Runs `do-the-slow-work` (8s) → Executes `build-report` → Throws `"The report oven is broken!"` → Fails.
+2. **Backoff Wait:** Inngest delays execution with exponential backoff.
+3. **Attempt 2:** Resumes → Fails again.
+4. **Attempt 3 (Final Retry):** Resumes → Fails → Run permanently marked **`Failed`**.
+5. **`onFailure` Handler:** Updates the report record to `"status": "failed"` with the exact failure error message.
+
 ---
 
-## 4. Provider, Model & Environment Configuration
+## 5. Architectural Questions & Concepts
 
-This system communicates via standard OpenAI-compatible HTTP requests. Three environment variables are the **only difference** between running against a local model on your laptop (Ollama) or a hosted cloud provider (OpenRouter / Groq / OpenAI):
+### Stage 3: Why bad input gets 400 immediately vs transient errors getting retried
+> **"A wrong input must be rejected at the door (400); only a wrong moment deserves a retry."**
+> 
+> When an incoming request contains invalid or missing data (e.g. missing `topic`), no amount of waiting or retrying will ever make it valid—retrying it wastes compute and pollutes queues. Conversely, when a background job encounters an intermittent operational fault (such as a database connection timeout, an upstream AI provider rate limit, or a temporary network hiccup), the request itself is perfectly valid and is highly likely to succeed after a brief backoff period.
 
-```env
-# Hosted OpenRouter (Free tier / production models)
-LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_API_KEY=your_openrouter_api_key_here
-LLM_MODEL=openrouter/free
+---
 
-# OR Local Ollama (Zero cost, no account required)
-# LLM_BASE_URL=http://localhost:11434/v1/
-# LLM_API_KEY=ollama
-# LLM_MODEL=gemma3:1b
+### Stage 4: Cron Schedules
+- **Every day at 08:00 UTC:** `0 8 * * *`
+- **Every Sunday at 22:00 UTC:** `0 22 * * 0` (or `0 22 * * 7`)
 
-# Operational Flags
-LLM_STUB=0        # Set to 1 for zero-cost offline development stub mode
-LLM_ENABLED=true  # Set to false for instant production kill switch fallback
+---
+
+### Stretch Goal Questions
+
+#### Idempotency: Why must jobs survive running twice?
+> In distributed systems, networks drop packets and workers crash mid-execution, meaning queues guarantee **at-least-once delivery**, not exactly-once delivery. An idempotent job inspects its persistent state before executing expensive mutations—if the report is already marked `done`, it immediately returns the existing result without re-executing steps or charging duplicate API costs.
+
+#### Concurrency Limiter: When would you want a queue to be slow?
+> You want a queue to be slow when protecting fragile downstream dependencies—such as strict third-party AI rate limits (e.g., 5 requests per second), database connection pools, or CPU-intensive image renderers—preventing a traffic spike from overwhelming your infrastructure with cascading outages.
+
+#### Durability & The Restart Experiment:
+> During an 8-second sleep step, if the Express server process is forcefully stopped (`Ctrl-C`) and restarted, **the background job does not disappear or restart from scratch**. Because Inngest persists step state durably in its event log, when the server boots back up, Inngest resumes execution exactly from the unfinished step without repeating previously completed work.
+
+---
+
+## 6. Stage 6: The AI Rematch ("AI vs Me")
+
+In Stage 6, we prompted an AI assistant from memory to build the same background job architecture in a quarantined folder ([`ai-version/`](file:///home/ahadiqbal/Career/FlyRank/Assingments/flyrank-todo-api/ai-version/)).
+
+### Side-by-Side Comparison
+
+| Feature | Hand-Built (`src/`) | AI Version (`ai-version/`) | Evaluation Findings |
+| :--- | :--- | :--- | :--- |
+| **HTTP Dispatch** | Non-blocking dispatch (<50ms 202 response) | `await inngest.send()` (blocks client if dev server is slow) | Hand-built provides genuine async isolation |
+| **Failure State** | `onFailure` hook flips status to `"failed"` | Throws error, but leaves status stuck in `"pending"` forever | AI failed to update polling state |
+| **Idempotency** | Prevents duplicate step execution on re-delivery | None (re-runs 8s sleep) | Hand-built prevents duplicate compute |
+| **Concurrency** | Enforces `{ limit: 2 }` | Omitted | Hand-built protects worker capacity |
+| **Outbox Artifacts** | Writes formatted `.txt` files to `outbox/` | Omitted | Hand-built satisfies all stretch goals |
+
+### Summary of Lessons Learned
+1. **What the AI did better:** Generated an ultra-concise ~70 line script using raw dictionary keys and array filters.
+2. **What the AI missed:** Forgot `onFailure` lifecycle handlers, blocking `await inngest.send()`, and idempotency guards.
+3. **What was omitted in the prompt:** We did not explicitly tell the AI *how* to handle the final failed state in memory, so it silently decided to leave it untouched.
+
+---
+
+## 7. Running the Automated Evaluation Test Suites
+
+Run both built-in test suites to verify all background jobs, endpoints, and Inngest step engines:
+
+```bash
+# 1. Test HTTP routes, 202 acceptance, validation guards, and stats
+node evals/test-background-jobs.js
+
+# 2. Test Inngest function steps, sleep, build, outbox generation, and cron
+node evals/test-inngest-execution.js
 ```
-
-> **Why hard-coding providers is an anti-pattern:** Decoupling the client through environment variables allows instant infrastructure failover between local edge instances (Ollama) and datacenters (OpenRouter/Groq/OpenAI) without a single line of code changes or server redeployment.
-
----
-
-## 5. Evaluation Benchmark Results
-
-We tested our pipeline against an 8-case hand-labelled benchmark dataset (`evals/cases.json`) covering clear categories, critical severity boundary cases, ambiguous multi-intent tickets, and adversarial prompt injections:
-
-- **Benchmark Date:** August 19, 2026
-- **Prompt Version:** `prompts/triage-v1.md` (and `prompts/triage-v2.md`)
-- **Key Field (Category) Score:** **8 / 8 (100.0% accuracy)**
-- **Urgency Field Score:** **8 / 8 (100.0% accuracy)**
-- **Run Command:** `npm run eval`
-
-### Case-by-Case Breakdown:
-| Case ID | Scenario | Input Type | Expected Category | Model Output | Status | Latency |
-| :--- | :--- | :--- | :--- | :--- | :---: | :---: |
-| `#1` | `duplicate_charge_invoice` | Clear Billing | `billing` (high) | `billing` (high) | ✅ MATCH | 820ms |
-| `#2` | `crash_on_export` | Clear Bug | `bug` (normal) | `bug` (normal) | ✅ MATCH | 790ms |
-| `#3` | `dark_mode_feature_request` | Feature Request | `feature` (low) | `feature` (low) | ✅ MATCH | 810ms |
-| `#4` | `subscription_cancellation_inquiry`| Billing Inquiry | `billing` (normal) | `billing` (normal) | ✅ MATCH | 750ms |
-| `#5` | `critical_data_loss_bug` | Critical Bug | `bug` (high) | `bug` (high) | ✅ MATCH | 830ms |
-| `#6` | `slack_webhook_integration` | Integration | `feature` (low) | `feature` (low) | ✅ MATCH | 760ms |
-| `#7` | `ambiguous_multi_intent` | Ambiguous | `other` (normal) | `other` (normal) | ✅ MATCH | 800ms |
-| `#8` | `prompt_injection_unsure` | Adversarial / Injection | `other` (low) | `other` (low) | ✅ MATCH | 770ms |
-
----
-
-## 6. Cost Observability & High-Volume Estimation
-
-Every model invocation logs a structured JSON telemetry line to `stdout`:
-```json
-{
-  "timestamp": "2026-08-19T08:10:14.465Z",
-  "event": "llm_triage_call",
-  "prompt_version": "v1",
-  "model": "openrouter/free",
-  "tokens": { "input": 312, "output": 48, "total": 360 },
-  "duration_ms": 782,
-  "repairs_needed": 0,
-  "estimated_cost_usd": 0.0000756,
-  "status": 200
-}
-```
-
-- **Single Request Cost:** ~360 tokens (312 prompt tokens + 48 completion tokens) ≈ **$0.0000756 USD**.
-- **10,000 Requests/Day Estimate:** **~$0.75 USD per day** (or ~$22.50 USD/month). With our built-in SHA-256 caching layer enabled, recurring queries reduce this cost by an estimated 35–50%.
-
----
-
-## 7. What I'd Fix With Another Day
-With another day, I would integrate **semantic vector embeddings with pgvector** directly in the database to cluster incoming tasks by semantic similarity and auto-detect emerging duplicate bug reports across different users before they even reach support engineers.
-
----
-
-## 8. 🥊 Bonus Stage: "AI vs Me" Rematch Analysis
-
-We tasked an AI code generator to build the exact same triage endpoint without seeing our architecture. The raw output was saved in `ai-version/` and diffed using `git diff --no-index src/ ai-version/src/`.
-
-### Prompt Used to Generate the AI Version:
-> *"Create an Express.js POST /triage endpoint that uses OpenAI to classify incoming support messages into category (billing, bug, feature, other), urgency, confidence, and reason."*
-
-### 3 Concrete Differences Found:
-1. **Unbounded 10-Minute Timeout Left in Place:** The AI code omitted the `timeout` parameter, relying on the OpenAI SDK's default 10-minute timeout. Our production code enforces an explicit `timeout: 30000` (30s) and returns a clean `HTTP 504 Gateway Timeout`.
-2. **Raw Model Text & Lack of Schema Validation:** The AI version returned `res.json({ result: rawContent })` directly, leaving callers vulnerable to malformed markdown fences and missing fields. Our code uses Zod schema validation, fence stripping, a 1-shot repair retry loop, and quarantines unrepairable failures to `logs/quarantine.jsonl` with `HTTP 422`.
-3. **No Retriable Error Discrimination:** The AI version had a generic `catch` block that failed to differentiate between transient network errors and client authentication errors. Our production code implements exponential backoff with jitter for `429`, `5xx`, and timeouts, but **fails immediately on 401/403/400** to avoid burning quota on bad credentials.
-
----
-
-## 9. Reliability & Production Architecture
-
-```
-[ Incoming Request: POST /triage ]
-               │
-      1. Zod Input Validation ──(Invalid)──► 400 Bad Request (Zero Token Cost)
-               │
-      2. Kill Switch Check ──(Disabled)──► 200 Fallback / 503
-               │
-      3. SHA-256 Cache Check ──(Hit)──► 200 Instant Cached JSON
-               │
-      4. OpenAI Call (30s Timeout, Jitter Retry on 429/5xx)
-               │
-      5. Parse & Zod Schema Validation
-            ├── (Valid) ──────► 200 OK + Structured Cost Log
-            └── (Invalid)
-                     │
-            6. Repair Retry (Attempt 2 with validation feedback)
-                  ├── (Valid) ──────► 200 OK (repairs_needed: 1)
-                  └── (Invalid) ────► 422 Unprocessable + logs/quarantine.jsonl
-```
-
-### Full Interactive API Documentation
-Interactive OpenAPI 3.0 documentation is available at `http://localhost:3000/docs`.
