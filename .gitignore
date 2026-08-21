@@ -5,6 +5,7 @@ tasks.db*
 *.db
 *.pdf
 reports/
-report.db
+report.db*
+
 
 
