@@ -286,56 +286,96 @@
         },
         "/reports": {
             "post": {
-                "summary": "Fast door background report submission (returns 202 Accepted)",
+                "summary": "Generate a sales PDF report with same-day idempotency caching",
                 "requestBody": {
-                    "required": true,
+                    "required": false,
                     "content": {
                         "application/json": {
                             "schema": {
                                 "type": "object",
                                 "properties": {
-                                    "topic": {
-                                        "type": "string",
-                                        "example": "cats"
+                                    "force": {
+                                        "type": "boolean",
+                                        "description": "Set true to force generate a new PDF bypassing same-day cache",
+                                        "example": false
+                                    },
+                                    "days": {
+                                        "type": "integer",
+                                        "description": "Number of past days for trend analysis",
+                                        "example": 30
                                     }
-                                },
-                                "required": ["topic"]
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Created - Fresh PDF report generated on disk",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "integer", "example": 1 },
+                                        "file": { "type": "string", "example": "/reports/1/file" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "200": {
+                        "description": "OK - Idempotent response returning existing cached report generated today",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "integer", "example": 1 },
+                                        "file": { "type": "string", "example": "/reports/1/file" },
+                                        "cached": { "type": "boolean", "example": true }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "get": {
+                "summary": "List all generated PDF reports with download links",
+                "responses": {
+                    "200": {
+                        "description": "List of all generated reports and metadata"
+                    }
+                }
+            }
+        },
+        "/reports/async": {
+            "post": {
+                "summary": "Fast door asynchronous background report submission (returns 202 Accepted)",
+                "requestBody": {
+                    "required": false,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "topic": { "type": "string", "example": "sales" }
+                                }
                             }
                         }
                     }
                 },
                 "responses": {
                     "202": {
-                        "description": "Accepted - background job initiated",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "id": { "type": "string" },
-                                        "status": { "type": "string", "example": "pending" }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Validation error (missing or empty topic)"
-                    }
-                }
-            },
-            "get": {
-                "summary": "Control panel listing of all reports and aggregate statistics",
-                "responses": {
-                    "200": {
-                        "description": "List of all reports and status metrics"
+                        "description": "Accepted - background job initiated"
                     }
                 }
             }
         },
         "/reports/{id}": {
             "get": {
-                "summary": "Poll status and retrieve generated background report",
+                "summary": "Get report metadata and download link",
                 "parameters": [
                     {
                         "name": "id",
@@ -348,10 +388,41 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "Report status object (pending, done, or failed)"
+                        "description": "Report metadata object"
                     },
                     "404": {
                         "description": "Report ID not found"
+                    }
+                }
+            }
+        },
+        "/reports/{id}/file": {
+            "get": {
+                "summary": "Download and view the binary PDF report file",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Binary PDF stream",
+                        "content": {
+                            "application/pdf": {
+                                "schema": {
+                                    "type": "string",
+                                    "format": "binary"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Report or PDF file not found"
                     }
                 }
             }

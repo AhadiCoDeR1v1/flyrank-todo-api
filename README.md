@@ -1,271 +1,197 @@
-# FlyRank Backend API: Durable Background Jobs & Async Worker Engine
+# FlyRank Backend API: PDF Report Generator & Data-to-Document Pipeline
 
-**Backend Engineering Track · Assignment BE-06 / A7 · "Your First Background Job"**
+**Backend Engineering Track · Assignment BE-08 / A8 · "PDF Report Generator"**
 
 ---
 
 ## 1. Overview & Architectural Philosophy
 
-When web requests perform slow, heavy tasks (AI inference, PDF report generation, video processing, bulk exports), holding the HTTP connection open causes request timeouts, worker thread starvation, and double-execution from client retries.
-
-This service implements the industry-standard **Asynchronous Request-Response Pattern**:
-1. **The Fast Door (`POST /reports`):** Validates input immediately, initializes state, queues the job event, and responds in milliseconds with **HTTP `202 Accepted`**.
-2. **The Background Worker (`Inngest`):** Orchestrates durable step-based execution (`step.sleep`, `step.run`), automatic exponential backoff retries on failure, and concurrency limits.
-3. **Status Polling (`GET /reports/:id`):** Provides real-time visibility into the job lifecycle (`pending` → `done` or `failed`).
-4. **Scheduled Cron Heartbeat (`* * * * *`):** Background cron job running on the clock to monitor and log system throughput without human intervention.
+"Generate a Report" is one of the most classic, critical features in production software. Whether generating monthly invoices, financial statements, or executive dashboards, the core pipeline consists of four essential moves:
 
 ```
 +──────────────────────────────────────────────────────────────────────────────────────────────────+
-|                                    BACKGROUND JOB ARCHITECTURE                                   |
+|                                    DATA-TO-DOCUMENT PIPELINE                                     |
 +──────────────────────────────────────────────────────────────────────────────────────────────────+
 |                                                                                                  |
-|   1. FAST ACCEPTANCE (Immediate 202)                                                             |
-|   [ Client ] ──POST /reports {topic}──► [ Express API ]                                          |
-|                                                │                                                 |
-|                                                ├── 1. Validate Input (Empty? -> 400 Bad Request) |
-|                                                ├── 2. Save in-memory: {id, topic, status:pending}|
-|                                                ├── 3. Non-blocking Inngest Event: report/requested|
-|                                                └── 4. Respond IMMEDIATELY: 202 Accepted {id}     |
+|   1. QUERY (SQL)              2. RENDER (Playwright)         3. STORE           4. SERVE BY LINK |
+|   Turn 200 order rows ──► HTML Template + Print CSS ──► Save artifact ──► Hand out address      |
+|   into 5 key numbers.     Page-Break Optimization.      to disk (PDF).    (res.sendFile).        |
 |                                                                                                  |
-|   2. DURABLE INNGEST WORKER                                                                      |
-|   [ Inngest Engine ] ◄── Listens for "report/requested"                                          |
-|            │                                                                                     |
-|            ├── Step 1: step.sleep("do-the-slow-work", "8s")  [Simulate heavy workload]          |
-|            └── Step 2: step.run("build-report", ...)                                             |
-|                     ├── Idempotency Guard (skip if already marked done)                          |
-|                     ├── Fault Injection (topic === "fail" -> Throw error & Retry 2x)             |
-|                     ├── Write report to outbox/<id>.txt (Outbox artifact)                        |
-|                     └── Update memory store -> status: "done", result: { ... }                   |
-|                                                                                                  |
-|   3. STATUS POLLING & CONTROL PANEL                                                              |
-|   [ Client ] ──GET /reports/:id ──► Returns {status: "pending" | "done" | "failed"}              |
-|   [ Client ] ──GET /reports     ──► Returns aggregate metrics & all reports                      |
-|                                                                                                  |
-|   4. SCHEDULED CRON HEARTBEAT & PURGE                                                            |
-|   [ Inngest Cron: "* * * * *" ]   ──► Runs every minute -> Logs pending/done/failed count        |
-|   [ Inngest Cron: "*/10 * * * *" ] ──► Purges completed reports older than 10 mins               |
+|   Rule of Thumb: "Store and link; never pass 20 MB of binary bytes through JSON APIs."           |
 +──────────────────────────────────────────────────────────────────────────────────────────────────+
 ```
 
 ---
 
-## 2. Quick Start: How to Run in Under 5 Minutes
+## 2. Quick Start: Run in Under 5 Minutes
 
-Running the background job system requires **two terminal commands** (no credit card or paid account required):
-
-### Terminal 1: Start Express API Server
+### Step 1: Seed the Database (~200 Orders)
 ```bash
-npm install
+npm run seed
+```
+*Output: `✅ Seed Complete: Database contains 200 orders.` (Safe to run multiple times without duplicating rows).*
+
+### Step 2: Start Express API Server
+```bash
 npm start
 ```
-*The API starts on `http://localhost:3000`.*
-
-### Terminal 2: Start Local Inngest Dev Server & Visual Dashboard
-```bash
-npm run inngest:dev
-# Alternatively:
-# npx inngest-cli@latest dev -u http://localhost:3000/api/inngest
-```
-*The Inngest visual dashboard will be live at `http://localhost:8288`.*
+*The API is live at `http://localhost:3000` with Swagger UI at `http://localhost:3000/docs`.*
 
 ---
 
-## 3. Endpoints & Inngest Functions Reference
+## 3. Dataset & SQL Aggregation Queries
 
-### API Endpoints
+We selected **Option A: The Little Shop** dataset (~200 orders across the last 30 days stored in SQLite `report.db`).
 
-| Method | Endpoint | Description | Status Codes |
+### The Four Aggregation Queries
+
+```sql
+-- 1. Total Order Count, Total Revenue, and Average Order Value
+SELECT 
+    COUNT(*) as total_orders,
+    COALESCE(SUM(amount), 0) as total_revenue,
+    COALESCE(AVG(amount), 0) as avg_order_value,
+    COALESCE(MIN(amount), 0) as min_order_value,
+    COALESCE(MAX(amount), 0) as max_order_value
+FROM orders;
+
+-- 2. Top 5 Products by Revenue Performance (GROUP BY)
+SELECT 
+    product,
+    COUNT(*) as order_count,
+    ROUND(SUM(amount), 2) as total_revenue,
+    ROUND(AVG(amount), 2) as avg_price
+FROM orders
+GROUP BY product
+ORDER BY total_revenue DESC
+LIMIT 5;
+
+-- 3. Daily Orders and Revenue Trend for the Last 7 Days (GROUP BY DATE)
+SELECT 
+    SUBSTR(created_at, 1, 10) as report_date,
+    COUNT(*) as order_count,
+    ROUND(SUM(amount), 2) as daily_revenue
+FROM orders
+GROUP BY SUBSTR(created_at, 1, 10)
+ORDER BY report_date DESC
+LIMIT 7;
+
+-- 4. Full Detailed Order Transactions Log (200 Rows for Page-Break Testing)
+SELECT id, customer, product, ROUND(amount, 2) as amount, created_at
+FROM orders
+ORDER BY id ASC;
+```
+
+---
+
+## 4. Endpoints & API Reference
+
+| Method | Endpoint | Description | Status Code |
 | :--- | :--- | :--- | :--- |
-| `GET` | `/health` | Server health diagnostic check | `200 OK` |
-| `POST` | `/reports` | Fast door: validates input, registers pending report, sends event | `202 Accepted`, `400 Bad Request` |
-| `GET` | `/reports/:id` | Status polling: returns current state (`pending`, `done`, `failed`) | `200 OK`, `404 Not Found` |
-| `GET` | `/reports` | Control panel: returns all reports and aggregate statistics | `200 OK` |
-| `ALL` | `/api/inngest` | Inngest SDK handler serving background functions | `200 OK` |
-| `GET` | `/docs` | Interactive Swagger UI API documentation | `200 OK` |
-| `POST` | `/triage` | Hardened AI classification pipeline (from A17) | `200 OK`, `400`, `422` |
-| `GET/POST` | `/tasks` | Todo CRUD database operations | `200 OK`, `201 Created` |
-
-### Inngest Functions
-
-| Function ID | Trigger | Key Steps & Behavior |
-| :--- | :--- | :--- |
-| `say-hello` | `test/hello` event | Sleeps 5s (`step.sleep`), returns greeting message. |
-| `make-report` | `report/requested` event | Sleeps 8s (`do-the-slow-work`), generates report, writes to `outbox/<id>.txt`, updates state to `done`. Configured with `retries: 2`, `concurrency: { limit: 2 }`, and idempotency protection. |
-| `heartbeat` | Cron `* * * * *` (every min) | Queries store and logs summary: `[Heartbeat Cron] X pending, Y done, Z failed (Total: N)`. |
-| `cleanup-old-reports` | Cron `*/10 * * * *` (every 10m) | Automatically purges completed reports older than 10 minutes from memory. |
+| `GET` | `/health` | Diagnostic server health check | `200 OK` |
+| `POST` | `/reports` | Generates PDF report with same-day idempotency cache | `201 Created` / `200 OK` |
+| `GET` | `/reports/:id` | Returns report metadata and download link | `200 OK`, `404 Not Found` |
+| `GET` | `/reports/:id/file` | Streams binary PDF document from disk | `200 OK` (`application/pdf`) |
+| `GET` | `/reports` | Control panel listing all generated reports | `200 OK` |
+| `POST` | `/reports/async` | Asynchronous background PDF generation via Inngest | `202 Accepted` |
 
 ---
 
-## 4. Copy-Pasteable `curl` Commands & Verifiable Output Proofs
+## 5. Copy-Pasteable `curl` Commands & Verifiable Proofs
 
-### ✅ Proof 1: Instant 202 Accepted & Status Polling
-
-#### Step 1: Submit Report (Sub-50ms Response)
-```bash
-time curl -i -X POST http://localhost:3000/reports \
-  -H "Content-Type: application/json" \
-  -d '{"topic": "cats"}'
-```
-
-**Output (HTTP 202 Accepted in 12ms):**
-```json
-HTTP/1.1 202 Accepted
-Content-Type: application/json; charset=utf-8
-
-{
-  "id": "rep_1787233679498_k8lxt",
-  "status": "pending"
-}
-```
-
-#### Step 2: Immediate Poll (< 2 Seconds After Submission)
-```bash
-curl -i http://localhost:3000/reports/rep_1787233679498_k8lxt
-```
-
-**Output (HTTP 200 OK — Still Working):**
-```json
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=utf-8
-
-{
-  "id": "rep_1787233679498_k8lxt",
-  "topic": "cats",
-  "status": "pending",
-  "createdAt": "2026-08-20T13:47:59.498Z",
-  "updatedAt": "2026-08-20T13:47:59.498Z"
-}
-```
-
-#### Step 3: Eventual Poll (~10 Seconds Later)
-```bash
-curl -i http://localhost:3000/reports/rep_1787233679498_k8lxt
-```
-
-**Output (HTTP 200 OK — Eventual Consistency Achieved):**
-```json
-HTTP/1.1 200 OK
-Content-Type: application/json; charset=utf-8
-
-{
-  "id": "rep_1787233679498_k8lxt",
-  "topic": "cats",
-  "status": "done",
-  "createdAt": "2026-08-20T13:47:59.498Z",
-  "updatedAt": "2026-08-20T13:48:07.520Z",
-  "outboxPath": "/workspace/outbox/rep_1787233679498_k8lxt.txt",
-  "result": {
-    "title": "Market & Sentiment Intelligence Report: cats",
-    "summary": "Comprehensive analytical breakdown for topic 'cats'. Automated data ingestion completed successfully with optimal trend indicators.",
-    "metrics": {
-      "sentimentScore": 0.88,
-      "confidenceScore": 0.96,
-      "dataPointsEvaluated": 1250,
-      "processingLatencyMs": 8024
-    },
-    "topic": "cats",
-    "generatedAt": "2026-08-20T13:48:07.519Z",
-    "version": "1.0.0"
-  }
-}
-```
-
----
-
-### ❌ Proof 2: Input Validation Guard (Rejection at the Door)
+### ✅ Proof 1: Generate PDF Report (HTTP 201 Created)
 ```bash
 curl -i -X POST http://localhost:3000/reports \
   -H "Content-Type: application/json" \
-  -d '{}'
+  -d '{"force": true}'
 ```
 
-**Output (HTTP 400 Bad Request — Zero Inngest Events Dispatched):**
+**Output:**
 ```json
-HTTP/1.1 400 Bad Request
+HTTP/1.1 201 Created
 Content-Type: application/json; charset=utf-8
 
 {
-  "error": "Validation failed",
-  "field": "topic",
-  "message": "Field 'topic' is required and must be a non-empty string"
+  "id": 1,
+  "file": "/reports/1/file"
 }
 ```
 
 ---
 
-### ⚠️ Proof 3: Fault Injection, Retries & Exponential Backoff (Topic `"fail"`)
+### 📥 Proof 2: Download & Verify Binary PDF Document
 ```bash
-curl -i -X POST http://localhost:3000/reports \
-  -H "Content-Type: application/json" \
-  -d '{"topic": "fail"}'
+curl -i -o my-sales-report.pdf http://localhost:3000/reports/1/file
 ```
 
-**Inngest Dashboard Execution Lifecycle (`http://localhost:8288`):**
-1. **Attempt 1:** Runs `do-the-slow-work` (8s) → Executes `build-report` → Throws `"The report oven is broken!"` → Fails.
-2. **Backoff Wait:** Inngest delays execution with exponential backoff.
-3. **Attempt 2:** Resumes → Fails again.
-4. **Attempt 3 (Final Retry):** Resumes → Fails → Run permanently marked **`Failed`**.
-5. **`onFailure` Handler:** Updates the report record to `"status": "failed"` with the exact failure error message.
+**Output:**
+```
+HTTP/1.1 200 OK
+Content-Type: application/pdf
+Content-Disposition: inline; filename="sales-report-1.pdf"
+Content-Length: 82496
+```
 
 ---
 
-## 5. Architectural Questions & Concepts
+### 🛡️ Proof 3: Idempotency Protection ("Ask Twice, Get One")
+Firing two POST requests on the same day returns the existing report instantly without re-rendering:
 
-### Stage 3: Why bad input gets 400 immediately vs transient errors getting retried
-> **"A wrong input must be rejected at the door (400); only a wrong moment deserves a retry."**
-> 
-> When an incoming request contains invalid or missing data (e.g. missing `topic`), no amount of waiting or retrying will ever make it valid—retrying it wastes compute and pollutes queues. Conversely, when a background job encounters an intermittent operational fault (such as a database connection timeout, an upstream AI provider rate limit, or a temporary network hiccup), the request itself is perfectly valid and is highly likely to succeed after a brief backoff period.
+```bash
+# Request 1 (Initial Generation or today's cache)
+curl -s -X POST http://localhost:3000/reports
+# Output: {"id":1,"file":"/reports/1/file","cached":true}
 
----
-
-### Stage 4: Cron Schedules
-- **Every day at 08:00 UTC:** `0 8 * * *`
-- **Every Sunday at 22:00 UTC:** `0 22 * * 0` (or `0 22 * * 7`)
-
----
-
-### Stretch Goal Questions
-
-#### Idempotency: Why must jobs survive running twice?
-> In distributed systems, networks drop packets and workers crash mid-execution, meaning queues guarantee **at-least-once delivery**, not exactly-once delivery. An idempotent job inspects its persistent state before executing expensive mutations—if the report is already marked `done`, it immediately returns the existing result without re-executing steps or charging duplicate API costs.
-
-#### Concurrency Limiter: When would you want a queue to be slow?
-> You want a queue to be slow when protecting fragile downstream dependencies—such as strict third-party AI rate limits (e.g., 5 requests per second), database connection pools, or CPU-intensive image renderers—preventing a traffic spike from overwhelming your infrastructure with cascading outages.
-
-#### Durability & The Restart Experiment:
-> During an 8-second sleep step, if the Express server process is forcefully stopped (`Ctrl-C`) and restarted, **the background job does not disappear or restart from scratch**. Because Inngest persists step state durably in its event log, when the server boots back up, Inngest resumes execution exactly from the unfinished step without repeating previously completed work.
+# Request 2 (Duplicate click)
+curl -s -X POST http://localhost:3000/reports
+# Output: {"id":1,"file":"/reports/1/file","cached":true}
+```
 
 ---
 
-## 6. Stage 6: The AI Rematch ("AI vs Me")
+## 6. Visual Preview of Generated PDF Report
 
-In Stage 6, we prompted an AI assistant from memory to build the same background job architecture in a quarantined folder ([`ai-version/`](file:///home/ahadiqbal/Career/FlyRank/Assingments/flyrank-todo-api/ai-version/)).
+The PDF report features an executive layout, KPI summary metric cards, Top 5 performance tables, 7-day revenue trend charts, and repeating table headers on every subsequent page:
+
+![PDF Report Page 1 Preview](docs/pdf_report_page1.png)
+
+---
+
+## 7. Core Architectural Questions & Takeaways
+
+### Stage 4: At what point would you move this work out of the request?
+> **Answer:** You should move PDF generation out of the synchronous request and into a background job (like Inngest) when the generation time exceeds **1.5 to 2 seconds**, when dataset volume grows beyond **5,000+ rows**, or when concurrent users cause server event loop delays. For a quick single-page report under 500ms, a direct request is acceptable; for heavy document pipelines, the asynchronous 202 pattern is mandatory.
+
+---
+
+### Stage 5: What does the idempotency check protect against, and where does a missing check cost money?
+> **Answer:** 
+> 1. **What it protects against:** Prevents redundant CPU/GPU rendering cycles, disk storage exhaustion, and race conditions when users double-click "Download Report" or browser auto-retries fire.
+> 2. **Real-world costly failure:** If an automated invoice generator or email marketing report lacks idempotency, a double-clicked request will send **two duplicate invoices to a customer** or double-charge payment webhooks, creating customer support churn and accounting nightmares.
+
+---
+
+## 8. Stage 7: The AI Rematch ("AI vs Me")
+
+In Stage 7, we prompted an AI assistant from memory in a quarantined folder ([`ai-version/pdf-generator/`](file:///home/ahadiqbal/Career/FlyRank/Assingments/flyrank-todo-api/ai-version/pdf-generator/)).
 
 ### Side-by-Side Comparison
 
-| Feature | Hand-Built (`src/`) | AI Version (`ai-version/`) | Evaluation Findings |
+| Feature | Hand-Built (`src/`) | AI Version (`ai-version/`) | Findings |
 | :--- | :--- | :--- | :--- |
-| **HTTP Dispatch** | Non-blocking dispatch (<50ms 202 response) | `await inngest.send()` (blocks client if dev server is slow) | Hand-built provides genuine async isolation |
-| **Failure State** | `onFailure` hook flips status to `"failed"` | Throws error, but leaves status stuck in `"pending"` forever | AI failed to update polling state |
-| **Idempotency** | Prevents duplicate step execution on re-delivery | None (re-runs 8s sleep) | Hand-built prevents duplicate compute |
-| **Concurrency** | Enforces `{ limit: 2 }` | Omitted | Hand-built protects worker capacity |
-| **Outbox Artifacts** | Writes formatted `.txt` files to `outbox/` | Omitted | Hand-built satisfies all stretch goals |
-
-### Summary of Lessons Learned
-1. **What the AI did better:** Generated an ultra-concise ~70 line script using raw dictionary keys and array filters.
-2. **What the AI missed:** Forgot `onFailure` lifecycle handlers, blocking `await inngest.send()`, and idempotency guards.
-3. **What was omitted in the prompt:** We did not explicitly tell the AI *how* to handle the final failed state in memory, so it silently decided to leave it untouched.
+| **SQL Aggregations** | Implements all 4 aggregations including 7-day date groupings | Missed 7-day daily trend grouping | Hand-built contains complete business metrics |
+| **Print CSS & Page Breaks** | Full `@page` margin control, `thead { display: table-header-group }`, zebra striping | Basic borders only, missing page margins | Hand-built produces publication-ready PDF |
+| **Serving Headers** | Sets `Content-Type: application/pdf`, `Content-Disposition: inline` | Default `res.sendFile()` without headers | Hand-built supports inline browser viewing |
+| **Database Modularity** | Clean separation of concerns (`sqlite.js`, `seed.js`, `reportData.js`) | Monolithic inlined database creation | Hand-built is modular and maintainable |
 
 ---
 
-## 7. Running the Automated Evaluation Test Suites
-
-Run both built-in test suites to verify all background jobs, endpoints, and Inngest step engines:
+## 9. Running Automated Test Suites
 
 ```bash
-# 1. Test HTTP routes, 202 acceptance, validation guards, and stats
-node evals/test-background-jobs.js
+# Run complete PDF report generator test suite
+npm test
 
-# 2. Test Inngest function steps, sleep, build, outbox generation, and cron
-node evals/test-inngest-execution.js
+# Run background jobs verification test suite
+npm run test:jobs
 ```
