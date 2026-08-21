@@ -5,8 +5,11 @@
   "main": "index.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node evals/run-evals.js",
-    "eval": "node evals/run-evals.js",
+    "seed": "node scripts/seed.js",
+    "test": "node evals/test-pdf-pipeline.js",
+    "test:pdf": "node evals/test-pdf-pipeline.js",
+    "test:jobs": "node evals/test-background-jobs.js",
+    "test:evals": "node evals/run-evals.js",
     "inngest:dev": "npx inngest-cli@latest dev -u http://localhost:3000/api/inngest"
   },
   "keywords": [],
@@ -20,6 +23,7 @@
     "inngest": "^4.18.1",
     "openai": "^7.5.0",
     "pg": "^8.22.0",
+    "playwright": "^1.62.1",
     "swagger-ui-express": "^5.0.1",
     "zod": "^4.4.3"
   }

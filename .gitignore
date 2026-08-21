@@ -4,4 +4,7 @@ package-lock.json
 tasks.db*
 *.db
 *.pdf
+reports/
+report.db
+
 
