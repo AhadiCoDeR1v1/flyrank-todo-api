@@ -2,6 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const { inngest } = require('./client');
 const { getReport, updateReport, getReportStats, cleanupOldReports } = require('./store');
+const { db } = require('../db/sqlite');
+const { getReportData } = require('../services/reportData');
+const { renderPdf } = require('../services/pdfRenderer');
 
 /**
  * Stage 1: Basic Inngest Function
@@ -177,9 +180,59 @@ const cleanupCron = inngest.createFunction(
     }
 );
 
+/**
+ * Assignment A8 Stretch Goal: Weekly PDF Report Cron Function
+ * Schedule: Every Monday at 08:00 UTC (0 8 * * 1)
+ * Automatically queries SQLite, renders PDF via Playwright, and saves report artifact.
+ */
+const weeklyMondayReportCron = inngest.createFunction(
+    {
+        id: 'weekly-monday-pdf-report',
+        name: 'Weekly Monday PDF Report',
+        triggers: [{ cron: '0 8 * * 1' }]
+    },
+    async ({ step }) => {
+        // Step 1: Query SQL Aggregations
+        const reportData = await step.run('query-sql-data', async () => {
+            return getReportData();
+        });
+
+        // Step 2: Render PDF using Playwright & Chromium
+        const pdfResult = await step.run('render-pdf-document', async () => {
+            const today = new Date().toISOString().substring(0, 10);
+            const reportId = Date.now();
+            const outputFilename = `sales-report-monday-${reportId}.pdf`;
+            const outputPath = path.join(__dirname, '../../reports', outputFilename);
+
+            await renderPdf(reportData, outputPath);
+
+            const insertStmt = db.prepare(`
+                INSERT INTO reports (path, created_at, created_date)
+                VALUES (?, ?, ?);
+            `);
+            const result = insertStmt.run(outputPath, new Date().toISOString(), today);
+            const newId = Number(result.lastInsertRowid);
+
+            return {
+                id: newId,
+                path: outputPath,
+                file: `/reports/${newId}/file`
+            };
+        });
+
+        console.log(`[Monday Cron] Generated weekly PDF report ID #${pdfResult.id} at ${pdfResult.file}`);
+        return {
+            status: 'ok',
+            report: pdfResult,
+            executedAt: new Date().toISOString()
+        };
+    }
+);
+
 module.exports = {
     sayHello,
     makeReport,
     heartbeat,
-    cleanupCron
+    cleanupCron,
+    weeklyMondayReportCron
 };

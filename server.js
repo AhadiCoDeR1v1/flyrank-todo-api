@@ -5,7 +5,7 @@ const swaggerDocument = require('./openapi.json');
 const { createClient } = require('@supabase/supabase-js');
 const { serve } = require('inngest/express');
 const { inngest } = require('./src/inngest/client');
-const { sayHello, makeReport, heartbeat, cleanupCron } = require('./src/inngest/functions');
+const { sayHello, makeReport, heartbeat, cleanupCron, weeklyMondayReportCron } = require('./src/inngest/functions');
 const triageRouter = require('./src/routes/triage');
 const reportsRouter = require('./src/routes/reports');
 
@@ -23,7 +23,7 @@ app.use(
     '/api/inngest',
     serve({
         client: inngest,
-        functions: [sayHello, makeReport, heartbeat, cleanupCron]
+        functions: [sayHello, makeReport, heartbeat, cleanupCron, weeklyMondayReportCron]
     })
 );
 
