@@ -6,6 +6,10 @@ tasks.db*
 *.pdf
 reports/
 report.db*
+FlyRank_*.md
+*Submission_Report.md
+*Submission*.md
+
 
 
 
